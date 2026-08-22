@@ -136,7 +136,7 @@ const LS_HIST  = "naq_hist_v1";
 const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.22.9";
+const APP_VERSION = "2026.08.22.10";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
@@ -210,6 +210,29 @@ function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("sh
 function shuffle(a){ for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
 function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function subjName(id){ const s=SUBJECTS.find(s=>s.id===id); return s?s.name:id; }
+
+/* ---------- 보기 순서 섞기 ----------
+   같은 문항을 다시 풀어도 위치로 답을 외우지 못하게 한다.
+   예외: 보기가 전부 짧은 수치이고 이미 정렬돼 있으면(실제 시험 관행) 그대로 둔다. */
+function keepChoiceOrder(q){
+  if(q.c.some(c => String(c).length > 28)) return false;
+  const nums = q.c.map(c=>{
+    const m = String(c).replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
+    return m ? parseFloat(m[1]) : null;
+  });
+  if(nums.some(n => n === null)) return false;
+  const asc  = nums.every((n,i)=> i===0 || nums[i-1] <= n);
+  const desc = nums.every((n,i)=> i===0 || nums[i-1] >= n);
+  return asc || desc;
+}
+/* perm(원본 인덱스 배열)을 적용한 사본을 만든다. perm이 없으면 원본 그대로. */
+function applyPerm(q, perm){
+  if(!perm) return q;
+  return {...q, c: perm.map(i=>q.c[i]), ans: perm.indexOf(q.ans-1)+1, _p: perm};
+}
+function shuffleChoices(list){
+  return list.map(q => keepChoiceOrder(q) ? q : applyPerm(q, shuffle([0,1,2,3,4])));
+}
 
 function pool(){
   return DATA.questions.filter(q => sel.subj.has(q.s) && sel.topics.has(q.t) && sel.diff.has(qd(q)));
@@ -520,13 +543,17 @@ function startMock(modeKey){
 /* ---------- quiz ---------- */
 function startQuiz(list, opts){
   if(!list.length){ toast("출제할 문항이 없습니다"); return; }
-  quiz = {list, idx:0, answers:[], fromNote:!!opts.fromNote, mock:!!opts.mock, mode:opts.mode||null,
-          defer:!!opts.defer};
+  quiz = {list: shuffleChoices(list), idx:0, answers:[], fromNote:!!opts.fromNote,
+          mock:!!opts.mock, mode:opts.mode||null, defer:!!opts.defer};
   if(quiz.mock) quiz.deadline = Date.now() + EXAM_MIN*60*1000;
   renderQ();
 }
 
 function answeredCount(){ return quiz.answers.filter(a=>a && a.pick).length; }
+
+/* 자동 넘김 대기 타이머 — 사용자가 먼저 이동하면 취소해야 화면이 튀지 않는다 */
+let advTimer = null;
+function clearAdvance(){ if(advTimer){ clearTimeout(advTimer); advTimer = null; } }
 
 /* ---------- 중간 저장 / 이어서 풀기 (모드별로 따로 보관) ---------- */
 function loadResumes(){
@@ -549,9 +576,11 @@ function resumeKind(st){
 }
 function pauseQuiz(){
   if(!quiz) return;
+  clearAdvance();
   const st = {
     t: Date.now(),
     ids: quiz.list.map(q=>q.id),
+    perms: quiz.list.map(q=> q._p || null),   // 보기 순서까지 그대로 복원해야 저장된 답이 어긋나지 않는다
     answers: quiz.answers.map(a=> a ? {pick:a.pick, ok:a.ok} : null),
     idx: quiz.idx, mock: quiz.mock, mode: quiz.mode, defer: quiz.defer, fromNote: quiz.fromNote,
     remain: quiz.deadline ? Math.max(0, quiz.deadline - Date.now()) : null
@@ -569,7 +598,11 @@ function resumeQuiz(key){
   const arr = loadResumes();
   const st = arr.find(x=>resumeKey(x) === key);
   if(!st) return;
-  const list = st.ids.map(id=>QBYID[id]);
+  // 저장된 보기 순서(perms)를 그대로 되살린다. 구 형식(perms 없음)은 원본 순서로 복원.
+  const list = st.ids.map((id,i)=> {
+    const q = QBYID[id];
+    return q ? applyPerm(q, st.perms && st.perms[i]) : q;
+  });
   if(list.some(q=>!q)){
     saveResumes(arr.filter(x=>x !== st));
     toast("문항이 바뀌어 이어서 풀 수 없습니다");
@@ -665,6 +698,7 @@ function renderQ(){
   if(def){
     app.querySelectorAll("[data-nav]").forEach(b=> b.onclick = ()=>{
       const k = b.dataset.nav;
+      clearAdvance();
       if(k==="sheet") return renderSheet();
       if(k==="prev" && quiz.idx>0){ quiz.idx--; renderQ(); }
       if(k==="next" && quiz.idx<total-1){ quiz.idx++; renderQ(); }
@@ -693,9 +727,13 @@ function answer(pick){
     quiz.answers[quiz.idx] = (prev && prev.pick === pick) ? null : {pick};
     renderQ();
     // 처음 답한 경우에만 자동으로 다음 문항으로 (답 변경·해제 시에는 머무름)
+    clearAdvance();
     if(fresh && quiz.answers[quiz.idx] && quiz.idx < quiz.list.length-1){
       const at = quiz.idx;
-      setTimeout(()=>{ if(quiz && quiz.defer && quiz.idx===at){ quiz.idx++; renderQ(); } }, 220);
+      advTimer = setTimeout(()=>{
+        advTimer = null;
+        if(quiz && quiz.defer && quiz.idx===at){ quiz.idx++; renderQ(); }
+      }, 220);
     }
     return;
   }
@@ -728,6 +766,7 @@ function nextQ(){
 
 /* ---------- 답안지 (종료 후 채점 모드) ---------- */
 function renderSheet(){
+  clearAdvance();
   const total = quiz.list.length;
   const bySubj = {};
   quiz.list.forEach((q,i)=>{ (bySubj[q.s] = bySubj[q.s]||[]).push(i); });
@@ -758,7 +797,7 @@ function renderSheet(){
   $("#pauseBtn").onclick = pauseQuiz;
   $("#submitBtn").onclick = submitExam;
   app.querySelectorAll("[data-jump]").forEach(b=> b.onclick = ()=>{
-    quiz.idx = +b.dataset.jump; renderQ();
+    clearAdvance(); quiz.idx = +b.dataset.jump; renderQ();
   });
   document.onkeydown = null;
   if(quiz.deadline) startClock();
@@ -767,6 +806,7 @@ function renderSheet(){
 
 /* 종료 후 채점: 제출 시 일괄 채점 */
 function submitExam(){
+  clearAdvance();
   const left = quiz.list.length - answeredCount();
   if(!quiz.timeUp && left > 0 &&
      !confirm(`아직 답하지 않은 문항이 ${left}개 있습니다.\n미응답은 오답으로 처리됩니다. 제출할까요?`)) return;
@@ -783,7 +823,7 @@ function submitExam(){
 /* ---------- result ---------- */
 function renderResult(){
   document.onkeydown = null;
-  stopClock();
+  stopClock(); clearAdvance();
   if(quiz){   // 완료한 모드의 중간 저장만 해제 (다른 모드 저장분은 유지)
     const k = resumeKey({mock:quiz.mock, mode:quiz.mode, defer:quiz.defer, fromNote:quiz.fromNote});
     saveResumes(loadResumes().filter(x=>resumeKey(x) !== k));
@@ -864,15 +904,18 @@ function renderResult(){
     <button class="btn ghost" id="homeBtn">홈으로</button>
     <button class="btn" id="noteBtn">오답노트${wrongs.length?" 복습":""}</button>
   </div>`;
-  app.querySelectorAll("[data-view]").forEach(b=> b.onclick = ()=> viewOne(b.dataset.view, renderResult));
+  app.querySelectorAll("[data-view]").forEach(b=> b.onclick = ()=> viewOne(b.dataset.view, renderResult, true));
   $("#homeBtn").onclick = ()=> goTab(quiz.mock ? "mock" : "practice");
   $("#noteBtn").onclick = ()=> goTab("note");
   window.scrollTo(0,0);
 }
 
 /* ---------- single view ---------- */
-function viewOne(id, backFn){
-  const q = QBYID[id]; if(!q) return;
+/* useSession=true면 방금 푼 세션의 보기 순서로 보여준다(결과 화면의 "내 답 ③"과 일치시키기 위해).
+   오답노트에서는 false로 호출해 항상 원본 순서로 보여준다(방문마다 순서가 바뀌지 않도록). */
+function viewOne(id, backFn, useSession){
+  const q = (useSession && quiz && quiz.list.find(x=>x.id===id)) || QBYID[id];
+  if(!q) return;
   app.innerHTML = `
   <div class="topbar"><button class="sm" id="backBtn">← 돌아가기</button>
     <span class="meta"><span class="subj-tag">${esc(subjName(q.s))} · ${esc(q.t)}</span></span></div>
@@ -960,7 +1003,7 @@ function renderNote(){
     $("#retryAll").onclick = ()=>{ if(shown.length) startQuiz(shuffle(shown.map(x=>x.q)), {fromNote:true}); };
     $("#autoRm").onchange = ev=>{ pref.autoRemove = ev.target.checked; savePref(); };
     app.querySelectorAll("[data-solve]").forEach(b=> b.onclick = ()=> startQuiz([QBYID[b.dataset.solve]], {fromNote:true}));
-    app.querySelectorAll("[data-view]").forEach(b=> b.onclick = ()=> viewOne(b.dataset.view, renderNote));
+    app.querySelectorAll("[data-view]").forEach(b=> b.onclick = ()=> viewOne(b.dataset.view, renderNote, false));
     app.querySelectorAll("[data-del]").forEach(b=> b.onclick = ()=>{ removeWrong(b.dataset.del); renderNote(); });
     $("#clearNote").onclick = ()=>{
       if(confirm(`오답노트 ${items.length}문항을 전부 삭제할까요?\n삭제하면 되돌릴 수 없습니다. (학습 기록은 유지됩니다)`)){
