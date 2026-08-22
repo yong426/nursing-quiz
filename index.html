@@ -127,6 +127,23 @@ let sel = {
 };
 const DIFF_NAME = {1:"쉬움", 2:"중간", 3:"어려움"};
 const qd = q => q.d || 2;
+
+/* 실전 모의고사 모드 — mix는 과목별 [쉬움, 중간, 어려움] 비율 */
+const MOCK_MODES = {
+  normal: {
+    label: "노멀",
+    sub: "기출 난이도 그대로",
+    desc: "실제 기출 7개 회차(700문항)를 분석한 난이도 분포를 과목별로 재현합니다. 실전 체감에 가장 가깝습니다.",
+    mix: {"기초":[0.641,0.327,0.033], "보건":[0.505,0.419,0.076],
+          "공중":[0.350,0.393,0.257], "실기":[0.448,0.462,0.090]}
+  },
+  hard: {
+    label: "하드",
+    sub: "기출보다 어렵게",
+    desc: "전 과목을 쉬움 20% · 중간 50% · 어려움 30%로 고정해 기출보다 어렵게 출제합니다. 실력 점검과 약점 훈련용입니다.",
+    mix: {"기초":[0.2,0.5,0.3], "보건":[0.2,0.5,0.3], "공중":[0.2,0.5,0.3], "실기":[0.2,0.5,0.3]}
+  }
+};
 let quiz = null;
 let examTimer = null;
 let noteSubj = "all";
@@ -253,7 +270,13 @@ function renderHome(){
   <button class="btn" id="startBtn" ${p.length===0?"disabled":""}>
     문제 풀기 시작 (${sel.count===0?p.length:Math.min(sel.count,p.length)}문항 / 선택범위 ${p.length}문항)
   </button>
-  <button class="btn exam" id="mockBtn">실전 모의고사 (${SUBJECTS.reduce((a,s)=>a+s.mock,0)}문항 · 합격 판정)</button>
+  <div class="card">
+    <h2>실전 모의고사 <span style="color:var(--sub);font-weight:500;font-size:.8rem">${SUBJECTS.reduce((a,s)=>a+s.mock,0)}문항 · 105분 · 합격 판정</span></h2>
+    ${Object.entries(MOCK_MODES).map(([k,m])=>`
+      <button class="btn exam" id="mock_${k}" style="margin-bottom:6px">실전 모의고사 · ${m.label} <span style="font-weight:500;opacity:.85">(${esc(m.sub)})</span></button>
+      <p class="hint" style="margin:0 0 12px">${esc(m.desc)}</p>`).join("")}
+    <p class="hint" style="margin:0">두 모드 모두 과목 배분(35/15/20/35)과 세부주제 비례 배분은 동일하며, 홈의 필터 설정과 무관하게 전 범위에서 출제됩니다.</p>
+  </div>
   <div class="rowbtns" style="margin-top:10px">
     <button class="btn ghost" id="noteBtn">오답노트${wrongN?`<span class="badge">${wrongN}</span>`:""}</button>
     <button class="btn ghost" id="histBtn">학습 기록</button>
@@ -297,44 +320,47 @@ function renderHome(){
     const list = shuffle(pool().slice());
     startQuiz(sel.count===0 ? list : list.slice(0, sel.count), {});
   };
-  $("#mockBtn").onclick = ()=>{
-    // 실전 배분: 과목별 mock 문항수 → 난이도(쉬움20/중간50/어려움30) → 주제 비례 이중 층화 (필터 무시)
-    const DIFF_MIX = {1:0.2, 2:0.5, 3:0.3};
-    let list = [];
-    for(const s of SUBJECTS){
-      const subjQs = DATA.questions.filter(q=>q.s===s.id);
-      const dq = [1,2,3].map(d=>{
-        const share = s.mock * DIFF_MIX[d];
-        return {d, share, n: Math.floor(share)};
-      });
-      let used = dq.reduce((a,x)=>a+x.n, 0);
-      dq.sort((a,b)=>(b.share-b.n)-(a.share-a.n));
-      for(let i=0; used<s.mock; i++, used++) dq[i%dq.length].n++;
-      let picked = [];
-      const pickedIds = new Set();
-      for(const {d, n} of dq){
-        const poolD = subjQs.filter(q=>qd(q)===d && !pickedIds.has(q.id));
-        const got = sampleByTopic(poolD, Math.min(n, poolD.length), s.id);
-        got.forEach(q=>pickedIds.add(q.id));
-        picked = picked.concat(got);
-      }
-      if(picked.length < s.mock){   // 특정 난이도 풀 부족 시 잔여로 보충
-        const rest = subjQs.filter(q=>!pickedIds.has(q.id));
-        picked = picked.concat(sampleByTopic(rest, s.mock - picked.length, s.id));
-      }
-      list = list.concat(picked);
-    }
-    startQuiz(shuffle(list), {mock:true});
-  };
+  Object.keys(MOCK_MODES).forEach(k=>{ $("#mock_"+k).onclick = ()=> startMock(k); });
   $("#noteBtn").onclick = renderNote;
   $("#histBtn").onclick = renderHistory;
   window.scrollTo(0,0);
 }
 
+/* 실전 모의고사 출제: 과목 → 난이도(모드별 배합) → 세부주제 비례 3단 층화 (홈 필터 무시) */
+function startMock(modeKey){
+  const mode = MOCK_MODES[modeKey];
+  let list = [];
+  for(const s of SUBJECTS){
+    const subjQs = DATA.questions.filter(q=>q.s===s.id);
+    const ratio = mode.mix[s.id] || [0.2,0.5,0.3];
+    const dq = [1,2,3].map(d=>{
+      const share = s.mock * ratio[d-1];
+      return {d, share, n: Math.floor(share)};
+    });
+    let used = dq.reduce((a,x)=>a+x.n, 0);
+    dq.sort((a,b)=>(b.share-b.n)-(a.share-a.n));
+    for(let i=0; used<s.mock; i++, used++) dq[i%dq.length].n++;
+    let picked = [];
+    const pickedIds = new Set();
+    for(const {d, n} of dq){
+      const poolD = subjQs.filter(q=>qd(q)===d && !pickedIds.has(q.id));
+      const got = sampleByTopic(poolD, Math.min(n, poolD.length), s.id);
+      got.forEach(q=>pickedIds.add(q.id));
+      picked = picked.concat(got);
+    }
+    if(picked.length < s.mock){   // 특정 난이도 풀 부족 시 잔여로 보충
+      const rest = subjQs.filter(q=>!pickedIds.has(q.id));
+      picked = picked.concat(sampleByTopic(rest, s.mock - picked.length, s.id));
+    }
+    list = list.concat(picked);
+  }
+  startQuiz(shuffle(list), {mock:true, mode:modeKey});
+}
+
 /* ---------- quiz ---------- */
 function startQuiz(list, opts){
   if(!list.length){ toast("출제할 문항이 없습니다"); return; }
-  quiz = {list, idx:0, answers:[], fromNote:!!opts.fromNote, mock:!!opts.mock};
+  quiz = {list, idx:0, answers:[], fromNote:!!opts.fromNote, mock:!!opts.mock, mode:opts.mode||null};
   if(quiz.mock) quiz.deadline = Date.now() + EXAM_MIN*60*1000;
   renderQ();
 }
@@ -345,7 +371,7 @@ function renderQ(){
   app.innerHTML = `
   <div class="topbar">
     <button class="sm" id="quitBtn">종료</button>
-    <span class="meta">${quiz.mock?`<span id="clock" style="font-weight:800"></span> · `:""}${quiz.fromNote?"오답노트 · ":""}${quiz.idx+1} / ${total}<br>
+    <span class="meta">${quiz.mock?`<span id="clock" style="font-weight:800"></span> · `:""}${quiz.mock&&quiz.mode?esc(MOCK_MODES[quiz.mode].label)+" · ":""}${quiz.fromNote?"오답노트 · ":""}${quiz.idx+1} / ${total}<br>
       <span class="subj-tag">${esc(subjName(q.s))}</span></span>
   </div>
   <div class="prog"><i style="width:${(quiz.idx)/total*100}%"></i></div>
@@ -435,11 +461,11 @@ function renderResult(){
   }
   if(!quiz.saved && n>0){
     quiz.saved = true;
-    saveSession({t:Date.now(), n:denom, ok:okN, mock:quiz.mock, note:quiz.fromNote,
+    saveSession({t:Date.now(), n:denom, ok:okN, mock:quiz.mock, mode:quiz.mode, note:quiz.fromNote,
       subj:[...new Set(quiz.list.slice(0, full?total:quiz.answers.length).map(q=>subjName(q.s)))].slice(0,4)});
   }
   app.innerHTML = `
-  <h1>채점 결과</h1>
+  <h1>채점 결과${quiz.mock && quiz.mode ? ` <span class="subj-tag" style="font-size:.8rem;vertical-align:3px">실전 ${esc(MOCK_MODES[quiz.mode].label)} 모드</span>` : ""}</h1>
   <div class="card">
     <div class="score">${okN} / ${denom} <small>문항</small></div>
     <div style="text-align:center;color:var(--sub);font-size:.95rem">정답률 ${denom?Math.round(okN/denom*100):0}%</div>
@@ -601,7 +627,7 @@ function renderHistory(){
       const pct = h.n?Math.round(h.ok/h.n*100):0;
       return `<div class="witem">
         <div class="info">
-          <div class="t1">${h.ok} / ${h.n} 문항 <span style="color:${pct>=70?"var(--ok)":pct>=40?"#e8a23d":"var(--bad)"}">(${pct}%)</span>${h.mock?' <span class="subj-tag">실전</span>':""}${h.note?' <span class="subj-tag">오답복습</span>':""}</div>
+          <div class="t1">${h.ok} / ${h.n} 문항 <span style="color:${pct>=70?"var(--ok)":pct>=40?"#e8a23d":"var(--bad)"}">(${pct}%)</span>${h.mock?` <span class="subj-tag">실전${h.mode&&MOCK_MODES[h.mode]?" "+esc(MOCK_MODES[h.mode].label):""}</span>`:""}${h.note?' <span class="subj-tag">오답복습</span>':""}</div>
           <div class="t2">${dt} · ${(h.subj||[]).map(esc).join(", ")}${(h.subj||[]).length>=4?" 외":""}</div>
         </div>
       </div>`;
