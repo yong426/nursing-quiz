@@ -59,7 +59,12 @@ def load_existing():
     return data.get("questions", [])
 
 
-def check_file(path, existing_norm, existing_q, seen_in_run):
+def choice_key(choices):
+    """보기 구성을 순서와 무관하게 식별하는 키 (앱이 보기 순서를 런타임에 섞으므로 순서는 무의미)."""
+    return tuple(sorted(norm(c) for c in choices))
+
+
+def check_file(path, existing_norm, existing_q, existing_csets, seen_in_run, seen_csets):
     errors, warns = [], []
     try:
         items = json.load(open(path, encoding="utf-8"))
@@ -111,6 +116,18 @@ def check_file(path, existing_norm, existing_q, seen_in_run):
             if near:
                 warns.append(f"{tag} 기존 문항과 매우 유사 — 확인 필요")
 
+        # 보기 5개가 기존 문항과 완전히 동일하면 사실상 같은 문제일 가능성이 높다.
+        # (개념 분류를 여러 사례로 묻는 정상적인 경우도 있어 오류가 아니라 경고로 처리)
+        ck = choice_key(it["c"])
+        if ck in seen_csets:
+            warns.append(f"{tag} 이번 배치 안에 보기 구성이 완전히 같은 문항이 있음 ({seen_csets[ck]}) — 사실상 같은 문제인지 확인")
+        else:
+            seen_csets[ck] = tag
+        if ck in existing_csets:
+            ids = existing_csets[ck]
+            warns.append(f"{tag} 기존 문항과 보기 5개가 완전히 동일 (id={', '.join(ids[:3])}"
+                         f"{' 외' if len(ids) > 3 else ''}) — 사실상 같은 문제면 다른 개념으로 교체")
+
         blob = str(it["q"]) + " " + " ".join(map(str, it["c"])) + " " + str(it["exp"])
         for pats, why in RISKY:
             if all(p.search(blob) for p in pats):
@@ -136,12 +153,16 @@ def main():
     existing = load_existing()
     existing_norm = {norm(q["q"]): q["id"] for q in existing}
     existing_q = list(existing_norm.keys())
-    print(f"기존 문제은행: {len(existing)}문항\n")
+    existing_csets = collections.defaultdict(list)
+    for q in existing:
+        if isinstance(q.get("c"), list) and len(q["c"]) == 5:
+            existing_csets[choice_key(q["c"])].append(q["id"])
+    print(f"기존 문제은행: {len(existing)}문항 (보기 구성 {len(existing_csets)}종)\n")
 
     all_err, all_warn, total = [], [], 0
-    seen_in_run = {}
+    seen_in_run, seen_csets = {}, {}
     for p in paths:
-        err, warn, n = check_file(p, existing_norm, existing_q, seen_in_run)
+        err, warn, n = check_file(p, existing_norm, existing_q, existing_csets, seen_in_run, seen_csets)
         total += n
         all_err += err; all_warn += warn
         print(f"{os.path.basename(p):40s} {n:4d}문항  오류 {len(err):3d}  경고 {len(warn):3d}")
