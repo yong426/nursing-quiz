@@ -74,6 +74,10 @@ h1{font-size:1.25rem;margin:8px 0 2px}
 .prog i{display:block;height:100%;background:var(--acc);border-radius:3px;transition:width .25s}
 .qcard{background:var(--card);border:1px solid var(--line);border-radius:var(--r);
   box-shadow:var(--shadow);padding:18px 16px;font-size:1.02rem;font-weight:600;line-height:1.6}
+.starbtn{border:1px solid var(--line);background:var(--card);border-radius:10px;
+  padding:3px 11px;font-size:1.2rem;line-height:1.25;cursor:pointer;color:var(--sub);
+  flex-shrink:0;transition:color .12s,border-color .12s,background .12s}
+.starbtn.on{color:#e8a23d;border-color:#e8a23d;background:#fff8ec}
 .qcard .tag{display:inline-block;font-size:.73rem;color:var(--acc);background:#e4f2ee;
   border-radius:6px;padding:2px 8px;font-weight:600;margin-bottom:8px}
 .subj-tag{display:inline-block;font-size:.75rem;color:var(--acc);background:#e4f2ee;
@@ -131,12 +135,13 @@ const $ = sel => document.querySelector(sel);
 const app = $("#app");
 const CIRCLED = ["①","②","③","④","⑤"];
 const LS_WRONG = "naq_wrong_v1";
+const LS_STAR  = "naq_star_v1";    // 별표(잘 몰라서 찍은 문제) — 오답과 별개로 보관
 const LS_PREF  = "naq_pref_v1";
 const LS_HIST  = "naq_hist_v1";
 const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.22.10";
+const APP_VERSION = "2026.08.22.11";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
@@ -145,7 +150,7 @@ const SUBJECTS = DATA.subjects;                    // [{id, name, mock}] mock = 
 const TOPICS = DATA.topics;                        // {subjectId: [topic,...]}
 const QBYID = Object.fromEntries(DATA.questions.map(q=>[q.id,q]));
 
-let pref = load(LS_PREF, {subj:null, topics:null, count:20, autoRemove:true, topicsOpen:true, diff:null});
+let pref = load(LS_PREF, {subj:null, topics:null, count:20, autoRemove:true, autoUnstar:false, topicsOpen:true, diff:null});
 let sel = {
   subj: new Set(pref.subj || SUBJECTS.map(s=>s.id)),
   topics: new Set(pref.topics || Object.values(TOPICS).flat()),
@@ -175,6 +180,7 @@ let quiz = null;
 let examTimer = null;
 let noteSubj = "all";
 let noteDiff = "all";
+let noteView = "wrong";   // "wrong" = 오답노트, "star" = 별표
 const EXAM_MIN = 105;   // 2025 CBT: 105문항 105분
 
 function stopClock(){ if(examTimer){ clearInterval(examTimer); examTimer = null; } }
@@ -198,9 +204,19 @@ function startClock(){ stopClock(); examTimer = setInterval(tickClock, 1000); ti
 
 function load(k,d){ try{ const v=JSON.parse(localStorage.getItem(k)); return v==null?d:v; }catch(e){ return d; } }
 function save(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
-function savePref(){ save(LS_PREF,{subj:[...sel.subj], topics:[...sel.topics], count:sel.count, autoRemove:pref.autoRemove, topicsOpen:pref.topicsOpen, diff:[...sel.diff], homeTab:pref.homeTab, defer:pref.defer}); }
+function savePref(){ save(LS_PREF,{subj:[...sel.subj], topics:[...sel.topics], count:sel.count, autoRemove:pref.autoRemove, autoUnstar:pref.autoUnstar, topicsOpen:pref.topicsOpen, diff:[...sel.diff], homeTab:pref.homeTab, defer:pref.defer}); }
 function wrongMap(){ return load(LS_WRONG,{}); }
 function setWrong(m){ save(LS_WRONG,m); }
+/* 별표 — 정답/오답과 무관하게 "잘 몰라서 찍은" 문항을 따로 모은다 */
+function starMap(){ return load(LS_STAR,{}); }
+function isStarred(id){ return !!starMap()[id]; }
+function toggleStar(id){
+  const m = starMap();
+  if(m[id]) delete m[id]; else m[id] = {t:Date.now()};
+  save(LS_STAR, m);
+  return !!m[id];
+}
+function unstar(id){ const m = starMap(); delete m[id]; save(LS_STAR, m); }
 function addWrong(q,picked){ const m=wrongMap(); const e=m[q.id]||{c:0}; e.c++; e.t=Date.now(); e.p=picked; m[q.id]=e; setWrong(m); }
 function removeWrong(id){ const m=wrongMap(); delete m[id]; setWrong(m); }
 function recordStat(q,ok){ const s=load(LS_STAT,{}); const e=s[q.id]||{r:0,w:0}; ok?e.r++:e.w++; s[q.id]=e; save(LS_STAT,s); }
@@ -324,16 +340,16 @@ function sampleByTopic(poolQs, n, subjId){
 const TABS = [
   {k:"practice", label:"문제 풀이"},
   {k:"mock",     label:"실전 모의고사", cls:"exam"},
-  {k:"note",     label:"오답노트"},
+  {k:"note",     label:"복습"},
   {k:"history",  label:"학습 기록"},
 ];
 let homeTab = TABS.some(t=>t.k===pref.homeTab) ? pref.homeTab : "practice";
 
 function tabsHtml(active){
-  const wrongN = Object.keys(wrongMap()).length;
+  const reviewN = Object.keys(wrongMap()).length + Object.keys(starMap()).length;
   return `<div class="tabs" id="homeTabs">${TABS.map(t=>
     `<button class="${t.cls||""} ${active===t.k?"on":""}" data-tab="${t.k}">${t.label}` +
-    (t.k==="note" && wrongN ? `<span class="badge">${wrongN}</span>` : "") + `</button>`).join("")}</div>`;
+    (t.k==="note" && reviewN ? `<span class="badge">${reviewN}</span>` : "") + `</button>`).join("")}</div>`;
 }
 function bindTabs(){
   const el = $("#homeTabs"); if(!el) return;
@@ -543,7 +559,7 @@ function startMock(modeKey){
 /* ---------- quiz ---------- */
 function startQuiz(list, opts){
   if(!list.length){ toast("출제할 문항이 없습니다"); return; }
-  quiz = {list: shuffleChoices(list), idx:0, answers:[], fromNote:!!opts.fromNote,
+  quiz = {list: shuffleChoices(list), idx:0, answers:[], fromNote:!!opts.fromNote, fromStar:!!opts.fromStar,
           mock:!!opts.mock, mode:opts.mode||null, defer:!!opts.defer};
   if(quiz.mock) quiz.deadline = Date.now() + EXAM_MIN*60*1000;
   renderQ();
@@ -566,13 +582,13 @@ function saveResumes(arr){
 }
 function resumeKey(st){
   return st.mock ? `mock:${st.mode||"-"}:${st.defer?"defer":"now"}`
-                 : (st.fromNote ? "note" : "practice");
+                 : (st.fromNote ? "note" : (st.fromStar ? "star" : "practice"));
 }
-function resumeTab(st){ return st.mock ? "mock" : (st.fromNote ? "note" : "practice"); }
+function resumeTab(st){ return st.mock ? "mock" : ((st.fromNote||st.fromStar) ? "note" : "practice"); }
 function resumeKind(st){
   return st.mock
     ? `실전 모의고사${st.mode&&MOCK_MODES[st.mode]?" · "+MOCK_MODES[st.mode].label:""} · ${st.defer?"종료 후 채점":"바로 채점"}`
-    : (st.fromNote ? "오답노트 복습" : "문제 풀이");
+    : (st.fromNote ? "오답노트 복습" : (st.fromStar ? "별표 복습" : "문제 풀이"));
 }
 function pauseQuiz(){
   if(!quiz) return;
@@ -582,7 +598,7 @@ function pauseQuiz(){
     ids: quiz.list.map(q=>q.id),
     perms: quiz.list.map(q=> q._p || null),   // 보기 순서까지 그대로 복원해야 저장된 답이 어긋나지 않는다
     answers: quiz.answers.map(a=> a ? {pick:a.pick, ok:a.ok} : null),
-    idx: quiz.idx, mock: quiz.mock, mode: quiz.mode, defer: quiz.defer, fromNote: quiz.fromNote,
+    idx: quiz.idx, mock: quiz.mock, mode: quiz.mode, defer: quiz.defer, fromNote: quiz.fromNote, fromStar: quiz.fromStar,
     remain: quiz.deadline ? Math.max(0, quiz.deadline - Date.now()) : null
   };
   const arr = loadResumes().filter(x=>resumeKey(x) !== resumeKey(st));   // 같은 모드는 최신 것으로 교체
@@ -609,7 +625,7 @@ function resumeQuiz(key){
     goTab(homeTab); return;
   }
   quiz = {list, idx: Math.min(st.idx, list.length-1), answers: st.answers.map(a=>a||null),
-          mock: !!st.mock, mode: st.mode||null, defer: !!st.defer, fromNote: !!st.fromNote};
+          mock: !!st.mock, mode: st.mode||null, defer: !!st.defer, fromNote: !!st.fromNote, fromStar: !!st.fromStar};
   // 바로 채점 모드에서 이미 채점된 문항에 머물러 있으면 다음 문항부터
   if(!quiz.defer && quiz.answers[quiz.idx]) quiz.idx = Math.min(quiz.idx+1, list.length-1);
   if(st.remain != null) quiz.deadline = Date.now() + st.remain;
@@ -669,13 +685,18 @@ function renderQ(){
       <button class="sm" id="pauseBtn">정지</button>
       <button class="sm" id="quitBtn">${def?"제출":"종료"}</button>
     </span>
-    <span class="meta">${quiz.mock?`<span id="clock" style="font-weight:800"></span> · `:""}${quiz.mock&&quiz.mode?esc(MOCK_MODES[quiz.mode].label)+" · ":""}${quiz.fromNote?"오답노트 · ":""}${quiz.idx+1} / ${total}<br>
+    <span class="meta">${quiz.mock?`<span id="clock" style="font-weight:800"></span> · `:""}${quiz.mock&&quiz.mode?esc(MOCK_MODES[quiz.mode].label)+" · ":""}${quiz.fromNote?"오답노트 · ":""}${quiz.fromStar?"별표 복습 · ":""}${quiz.idx+1} / ${total}<br>
       <span class="subj-tag">${esc(subjName(q.s))}</span></span>
   </div>
   <div class="prog"><i style="width:${(def?answeredCount():quiz.idx)/total*100}%"></i></div>
   ${def?`<div class="qmeta"><span>${esc(subjName(q.s))} · ${esc(q.t)}</span><span>답안 ${answeredCount()} / ${total}</span></div>`:""}
   ${def?navbarHtml(total):""}
-  <div class="qcard" ${def?'style="margin-top:12px"':""}>${def?`<span class="tag">${quiz.idx+1}번</span>`:`<span class="tag">${esc(q.t)}</span>`}<br>${esc(q.q)}</div>
+  <div class="qcard" ${def?'style="margin-top:12px"':""}>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
+      ${def?`<span class="tag">${quiz.idx+1}번</span>`:`<span class="tag">${esc(q.t)}</span>`}
+      <button class="starbtn ${isStarred(q.id)?"on":""}" id="starBtn"
+        title="잘 몰라서 찍은 문제 — 복습 탭의 별표 목록에 모입니다">${isStarred(q.id)?"★":"☆"}</button>
+    </div>${esc(q.q)}</div>
   <div class="choices" id="choiceBtns">
     ${q.c.map((c,i)=>`<button data-a="${i+1}"${def&&cur&&cur.pick===i+1?' class="sel-ok"':""}><span class="no">${CIRCLED[i]}</span><span>${esc(c)}</span></button>`).join("")}
   </div>
@@ -686,6 +707,13 @@ function renderQ(){
   `:""}
   <div id="feedback"></div>`;
 
+  $("#starBtn").onclick = ()=>{
+    const on = toggleStar(q.id);
+    const b = $("#starBtn");
+    b.textContent = on ? "★" : "☆";
+    b.classList.toggle("on", on);
+    toast(on ? "별표에 추가했습니다" : "별표를 해제했습니다");
+  };
   $("#pauseBtn").onclick = pauseQuiz;
   $("#quitBtn").onclick = ()=>{
     if(def) return submitExam();
@@ -748,7 +776,10 @@ function answer(pick){
   });
   recordStat(q, ok);
   if(!ok) addWrong(q, pick);
-  else if(quiz.fromNote && pref.autoRemove){ removeWrong(q.id); toast("오답노트에서 제거되었습니다"); }
+  else {
+    if(quiz.fromNote && pref.autoRemove){ removeWrong(q.id); toast("오답노트에서 제거되었습니다"); }
+    if(quiz.fromStar && pref.autoUnstar){ unstar(q.id); toast("별표가 해제되었습니다"); }
+  }
 
   const last = quiz.idx === quiz.list.length-1;
   $("#feedback").innerHTML = `
@@ -825,7 +856,7 @@ function renderResult(){
   document.onkeydown = null;
   stopClock(); clearAdvance();
   if(quiz){   // 완료한 모드의 중간 저장만 해제 (다른 모드 저장분은 유지)
-    const k = resumeKey({mock:quiz.mock, mode:quiz.mode, defer:quiz.defer, fromNote:quiz.fromNote});
+    const k = resumeKey({mock:quiz.mock, mode:quiz.mode, defer:quiz.defer, fromNote:quiz.fromNote, fromStar:quiz.fromStar});
     saveResumes(loadResumes().filter(x=>resumeKey(x) !== k));
   }
   const done = quiz.answers.filter(Boolean);
@@ -919,21 +950,35 @@ function viewOne(id, backFn, useSession){
   app.innerHTML = `
   <div class="topbar"><button class="sm" id="backBtn">← 돌아가기</button>
     <span class="meta"><span class="subj-tag">${esc(subjName(q.s))} · ${esc(q.t)}</span></span></div>
-  <div class="qcard">${esc(q.q)}</div>
+  <div class="qcard">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+      <button class="starbtn ${isStarred(q.id)?"on":""}" id="starBtn2" title="별표">${isStarred(q.id)?"★":"☆"}</button>
+    </div>${esc(q.q)}</div>
   <div class="choices">
     ${q.c.map((c,i)=>`<button disabled class="${i+1===q.ans?"reveal":""}"><span class="no">${CIRCLED[i]}</span><span>${esc(c)}</span></button>`).join("")}
   </div>
   <div class="expl">${esc(q.exp)}</div>`;
   $("#backBtn").onclick = backFn;
+  $("#starBtn2").onclick = ()=>{
+    const on = toggleStar(q.id);
+    const b2 = $("#starBtn2");
+    b2.textContent = on ? "★" : "☆";
+    b2.classList.toggle("on", on);
+    toast(on ? "별표에 추가했습니다" : "별표를 해제했습니다");
+  };
   window.scrollTo(0,0);
 }
 
-/* ---------- wrong note ---------- */
+/* ---------- 복습: 오답노트 + 별표 ---------- */
 function renderNote(){
   document.onkeydown = null; stopClock();
-  const m = wrongMap();
+  const isStar = noteView === "star";
+  const m = isStar ? starMap() : wrongMap();
   const items = Object.entries(m).map(([id,e])=>({q:QBYID[id],e})).filter(x=>x.q)
     .sort((a,b)=> b.e.t - a.e.t);
+  const wrongN = Object.keys(wrongMap()).length;
+  const starN  = Object.keys(starMap()).length;
+  const KIND   = isStar ? "별표" : "오답";
   // 필터가 가리키는 대상이 사라졌으면 전체로 되돌림
   const hasSubj = s => items.some(x=>x.q.s===s);
   const hasDiff = d => items.some(x=>qd(x.q)===d);
@@ -953,7 +998,10 @@ function renderNote(){
   app.innerHTML = `
   ${tabsHtml("note")}
   ${resumeCardHtml("note")}
-  <p class="sub" style="margin:-6px 0 12px">오답노트 ${items.length}문항</p>
+  <div class="seg" id="viewSeg" style="width:100%;margin-bottom:10px">
+    <button data-view2="wrong" class="${isStar?"":"on"}" style="flex:1">오답노트 ${wrongN}</button>
+    <button data-view2="star" class="${isStar?"on":""}" style="flex:1">★ 별표 ${starN}</button>
+  </div>
   ${items.length?`
   <div class="card" style="padding:12px 14px;margin-bottom:10px">
     <h3 style="margin:0 0 6px">과목</h3>
@@ -967,10 +1015,10 @@ function renderNote(){
       ${[1,2,3].filter(d=>hasDiff(d)).map(d=>`<button class="chip ${noteDiff===String(d)?"on":""}" data-nd="${d}"${diffCnt[d]?"":' style="opacity:.45"'}>${DIFF_NAME[d]}<small>${diffCnt[d]||0}</small></button>`).join("")}
     </div>
   </div>
-  <button class="btn" id="retryAll" ${shown.length?"":"disabled"}>${filterLabel?esc(filterLabel)+" 오답 다시 풀기":"오답 전체 다시 풀기"} (${shown.length})</button>
+  <button class="btn" id="retryAll" ${shown.length?"":"disabled"}>${filterLabel?esc(filterLabel)+" "+KIND+" 다시 풀기":KIND+" 전체 다시 풀기"} (${shown.length})</button>
   <div style="margin:10px 0 4px">
     <label style="font-size:.82rem;color:var(--sub)">
-      <input type="checkbox" id="autoRm" ${pref.autoRemove?"checked":""}> 다시 풀어 맞히면 자동 제거
+      <input type="checkbox" id="autoRm" ${(isStar?pref.autoUnstar:pref.autoRemove)?"checked":""}> 다시 풀어 맞히면 ${isStar?"별표":"목록에서"} 자동 해제
     </label>
   </div>
   <div class="card" style="padding:6px 14px">
@@ -978,19 +1026,23 @@ function renderNote(){
       <div class="witem">
         <div class="info">
           <div class="t1">${esc(q.q)}</div>
-          <div class="t2"><span class="subj-tag">${esc(q.t)}</span> <span class="subj-tag">${DIFF_NAME[qd(q)]}</span> ${e.c}회 틀림 · ${new Date(e.t).toLocaleDateString("ko-KR")}</div>
+          <div class="t2"><span class="subj-tag">${esc(q.t)}</span> <span class="subj-tag">${DIFF_NAME[qd(q)]}</span> ${isStar?"별표":e.c+"회 틀림"} · ${new Date(e.t).toLocaleDateString("ko-KR")}</div>
         </div>
         <div class="acts">
           <button class="sm primary" data-solve="${q.id}">풀기</button>
           <button class="sm" data-view="${q.id}">해설</button>
           <button class="sm danger" data-del="${q.id}">삭제</button>
         </div>
-      </div>`).join("") : `<div class="empty" style="padding:16px 0">선택한 조건에 해당하는 오답이 없습니다.</div>`}
+      </div>`).join("") : `<div class="empty" style="padding:16px 0">선택한 조건에 해당하는 ${KIND} 문항이 없습니다.</div>`}
   </div>
-  <button class="btn ghost" id="clearNote" style="color:var(--bad)">오답노트 전체 초기화</button>
-  `:`<div class="empty">저장된 오답이 없습니다.<br>문제를 풀다 틀리면 자동으로 저장됩니다.</div>`}
+  <button class="btn ghost" id="clearNote" style="color:var(--bad)">${KIND} 목록 전체 초기화</button>
+  `:`<div class="empty">${isStar?"별표한 문항이 없습니다.<br>문제를 풀 때 상단 ☆ 버튼을 누르면 여기에 모입니다.":"저장된 오답이 없습니다.<br>문제를 풀다 틀리면 자동으로 저장됩니다."}</div>`}
   `;
   bindTabs(); bindResume();
+  $("#viewSeg").addEventListener("click", ev=>{
+    const b = ev.target.closest("[data-view2]"); if(!b) return;
+    noteView = b.dataset.view2; noteSubj = "all"; noteDiff = "all"; renderNote();
+  });
   if(items.length){
     $("#noteChips").addEventListener("click", ev=>{
       const b = ev.target.closest("[data-ns]"); if(!b) return;
@@ -1000,15 +1052,22 @@ function renderNote(){
       const b = ev.target.closest("[data-nd]"); if(!b) return;
       noteDiff = b.dataset.nd; renderNote();
     });
-    $("#retryAll").onclick = ()=>{ if(shown.length) startQuiz(shuffle(shown.map(x=>x.q)), {fromNote:true}); };
-    $("#autoRm").onchange = ev=>{ pref.autoRemove = ev.target.checked; savePref(); };
-    app.querySelectorAll("[data-solve]").forEach(b=> b.onclick = ()=> startQuiz([QBYID[b.dataset.solve]], {fromNote:true}));
+    const opts = isStar ? {fromStar:true} : {fromNote:true};
+    $("#retryAll").onclick = ()=>{ if(shown.length) startQuiz(shuffle(shown.map(x=>x.q)), opts); };
+    $("#autoRm").onchange = ev=>{
+      if(isStar) pref.autoUnstar = ev.target.checked; else pref.autoRemove = ev.target.checked;
+      savePref();
+    };
+    app.querySelectorAll("[data-solve]").forEach(b=> b.onclick = ()=> startQuiz([QBYID[b.dataset.solve]], opts));
     app.querySelectorAll("[data-view]").forEach(b=> b.onclick = ()=> viewOne(b.dataset.view, renderNote, false));
-    app.querySelectorAll("[data-del]").forEach(b=> b.onclick = ()=>{ removeWrong(b.dataset.del); renderNote(); });
+    app.querySelectorAll("[data-del]").forEach(b=> b.onclick = ()=>{
+      if(isStar) unstar(b.dataset.del); else removeWrong(b.dataset.del);
+      renderNote();
+    });
     $("#clearNote").onclick = ()=>{
-      if(confirm(`오답노트 ${items.length}문항을 전부 삭제할까요?\n삭제하면 되돌릴 수 없습니다. (학습 기록은 유지됩니다)`)){
-        localStorage.removeItem(LS_WRONG);
-        toast("오답노트가 초기화되었습니다");
+      if(confirm(`${KIND} 목록 ${items.length}문항을 전부 삭제할까요?\n삭제하면 되돌릴 수 없습니다. (학습 기록은 유지됩니다)`)){
+        localStorage.removeItem(isStar ? LS_STAR : LS_WRONG);
+        toast(`${KIND} 목록이 초기화되었습니다`);
         renderNote();
       }
     };
