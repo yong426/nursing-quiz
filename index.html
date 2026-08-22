@@ -137,7 +137,7 @@ h1{font-size:1.25rem;margin:8px 0 2px}
 <div class="wrap" id="app"></div>
 <div class="toast" id="toast"></div>
 
-<script src="data.js?v=2438b"></script>
+<script src="data.js?v=2438c"></script>
 <script>
 "use strict";
 const $ = sel => document.querySelector(sel);
@@ -151,7 +151,7 @@ const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
 const LS_RECENT = "naq_recent_v1";   // 최근 출제 이력(회차 순번) — 같은 문항이 연달아 나오지 않게
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.23.1";
+const APP_VERSION = "2026.08.23.2";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
