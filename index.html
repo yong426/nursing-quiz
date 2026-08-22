@@ -33,6 +33,12 @@ h1{font-size:1.25rem;margin:8px 0 2px}
 .seg{display:flex;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;width:fit-content}
 .seg button{border:0;background:var(--card);padding:8px 16px;font-size:.9rem;cursor:pointer;color:var(--ink)}
 .seg button.on{background:var(--acc);color:#fff}
+.tabs{display:flex;gap:8px;margin:0 0 14px}
+.tabs button{flex:1;border:1px solid var(--line);background:var(--card);color:var(--sub);
+  border-radius:12px;padding:12px 8px;font-size:.95rem;font-weight:700;cursor:pointer;
+  box-shadow:var(--shadow);transition:background .12s,color .12s,border-color .12s}
+.tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.tabs button.on.exam{background:#134e8f;border-color:#134e8f}
 .btn{display:block;width:100%;border:0;border-radius:var(--r);padding:15px;font-size:1.05rem;
   font-weight:700;cursor:pointer;background:var(--acc);color:var(--acc-ink)}
 .btn.ghost{background:var(--card);color:var(--ink);border:1px solid var(--line);font-weight:600}
@@ -169,7 +175,7 @@ function startClock(){ stopClock(); examTimer = setInterval(tickClock, 1000); ti
 
 function load(k,d){ try{ const v=JSON.parse(localStorage.getItem(k)); return v==null?d:v; }catch(e){ return d; } }
 function save(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
-function savePref(){ save(LS_PREF,{subj:[...sel.subj], topics:[...sel.topics], count:sel.count, autoRemove:pref.autoRemove, topicsOpen:pref.topicsOpen, diff:[...sel.diff]}); }
+function savePref(){ save(LS_PREF,{subj:[...sel.subj], topics:[...sel.topics], count:sel.count, autoRemove:pref.autoRemove, topicsOpen:pref.topicsOpen, diff:[...sel.diff], homeTab:pref.homeTab}); }
 function wrongMap(){ return load(LS_WRONG,{}); }
 function setWrong(m){ save(LS_WRONG,m); }
 function addWrong(q,picked){ const m=wrongMap(); const e=m[q.id]||{c:0}; e.c++; e.t=Date.now(); e.p=picked; m[q.id]=e; setWrong(m); }
@@ -210,6 +216,7 @@ function sampleByTopic(poolQs, n, subjId){
 
 /* ---------- home ---------- */
 let topicsOpen = pref.topicsOpen !== false;
+let homeTab = (pref.homeTab === "mock") ? "mock" : "practice";
 function renderHome(){
   quiz = null; document.onkeydown = null; stopClock();
   const wrongN = Object.keys(wrongMap()).length;
@@ -223,10 +230,17 @@ function renderHome(){
   const visTopicList = visTopics.flatMap(s=>TOPICS[s.id]||[]);
   const allTopicOn = visTopicList.every(t=>sel.topics.has(t));
 
+  const tab = homeTab;
   app.innerHTML = `
   <h1>간호조무사 모의 문제은행</h1>
   <p class="sub">국가시험 대비 자체 제작 ${DATA.questions.length}문항 · 5지선다 · 해설 포함</p>
 
+  <div class="tabs" id="homeTabs">
+    <button class="${tab==="practice"?"on":""}" data-tab="practice">문제 풀이</button>
+    <button class="exam ${tab==="mock"?"on":""}" data-tab="mock">실전 모의고사</button>
+  </div>
+
+  ${tab!=="practice" ? "" : `
   <div class="card">
     <h2>과목 선택 <button class="fold" id="subjAll">${allSubjOn?"전체 해제":"전체 선택"}</button></h2>
     <div class="chips" id="subjChips">
@@ -270,13 +284,28 @@ function renderHome(){
   <button class="btn" id="startBtn" ${p.length===0?"disabled":""}>
     문제 풀기 시작 (${sel.count===0?p.length:Math.min(sel.count,p.length)}문항 / 선택범위 ${p.length}문항)
   </button>
+  `}
+
+  ${tab!=="mock" ? "" : `
   <div class="card">
     <h2>실전 모의고사 <span style="color:var(--sub);font-weight:500;font-size:.8rem">${SUBJECTS.reduce((a,s)=>a+s.mock,0)}문항 · 105분 · 합격 판정</span></h2>
+    <p class="hint" style="margin:0 0 12px">국가시험과 동일하게 기초간호학 35 · 보건간호학 15 · 공중보건학 20 · 실기 35문항이 출제되고,
+      총점 60%(63문항) 이상 + 매 과목 40% 이상이면 합격입니다. 105분이 지나면 자동으로 채점됩니다.</p>
     ${Object.entries(MOCK_MODES).map(([k,m])=>`
-      <button class="btn exam" id="mock_${k}" style="margin-bottom:6px">실전 모의고사 · ${m.label} <span style="font-weight:500;opacity:.85">(${esc(m.sub)})</span></button>
-      <p class="hint" style="margin:0 0 12px">${esc(m.desc)}</p>`).join("")}
-    <p class="hint" style="margin:0">두 모드 모두 과목 배분(35/15/20/35)과 세부주제 비례 배분은 동일하며, 홈의 필터 설정과 무관하게 전 범위에서 출제됩니다.</p>
+      <button class="btn exam" id="mock_${k}" style="margin-bottom:6px">${m.label} 모드 <span style="font-weight:500;opacity:.85">· ${esc(m.sub)}</span></button>
+      <p class="hint" style="margin:0 0 14px">${esc(m.desc)}</p>`).join("")}
+    <p class="hint" style="margin:0;padding-top:4px;border-top:1px solid var(--line)">
+      두 모드 모두 세부주제 비례 배분이 적용되며, '문제 풀이' 탭의 필터 설정과 무관하게 전 범위에서 출제됩니다.</p>
   </div>
+  ${(()=>{ const ms = load(LS_HIST,[]).filter(h=>h.mock).slice(0,3);
+    return ms.length ? `<div class="card"><h2>최근 모의고사 결과</h2>${ms.map(h=>{
+      const d = new Date(h.t), pct = h.n?Math.round(h.ok/h.n*100):0, pass = h.ok >= Math.ceil(h.n*0.6);
+      return `<div class="witem"><div class="info">
+        <div class="t1">${h.ok} / ${h.n} 문항 <span style="color:${pass?"var(--ok)":"var(--bad)"}">(${pct}% · ${pass?"합격선 통과":"합격선 미달"})</span></div>
+        <div class="t2">${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}${h.mode&&MOCK_MODES[h.mode]?" · "+esc(MOCK_MODES[h.mode].label)+" 모드":""}</div>
+      </div></div>`; }).join("")}</div>` : ""; })()}
+  `}
+
   <div class="rowbtns" style="margin-top:10px">
     <button class="btn ghost" id="noteBtn">오답노트${wrongN?`<span class="badge">${wrongN}</span>`:""}</button>
     <button class="btn ghost" id="histBtn">학습 기록</button>
@@ -285,42 +314,49 @@ function renderHome(){
   <p class="footer">본 문제은행은 간호조무사 국가시험 형식에 맞춰 자체 제작한 학습용 모의문제입니다.<br>
   실제 기출문제가 아니며, 해설은 참고용으로 오류가 있을 수 있습니다.</p>`;
 
-  $("#subjChips").addEventListener("click", ev=>{
-    const b = ev.target.closest("[data-subj]"); if(!b) return;
-    const id = b.dataset.subj;
-    if(sel.subj.has(id)) sel.subj.delete(id); else sel.subj.add(id);
-    savePref(); renderHome();
+  $("#homeTabs").addEventListener("click", ev=>{
+    const b = ev.target.closest("[data-tab]"); if(!b) return;
+    homeTab = b.dataset.tab; pref.homeTab = homeTab; savePref(); renderHome();
   });
-  $("#subjAll").onclick = ()=>{
-    sel.subj = new Set(sel.subj.size===SUBJECTS.length ? [] : SUBJECTS.map(s=>s.id));
-    savePref(); renderHome();
-  };
-  $("#topicFold").onclick = ()=>{ topicsOpen = !topicsOpen; pref.topicsOpen = topicsOpen; savePref(); renderHome(); };
-  $("#topicAll").onclick = ()=>{
-    if(allTopicOn) visTopicList.forEach(t=>sel.topics.delete(t));
-    else visTopicList.forEach(t=>sel.topics.add(t));
-    savePref(); renderHome();
-  };
-  app.querySelectorAll("[data-topic]").forEach(b=> b.onclick = ()=>{
-    const t = b.dataset.topic;
-    if(sel.topics.has(t)) sel.topics.delete(t); else sel.topics.add(t);
-    savePref(); renderHome();
-  });
-  $("#diffChips").addEventListener("click", ev=>{
-    const b = ev.target.closest("[data-diff]"); if(!b) return;
-    const d = +b.dataset.diff;
-    if(sel.diff.has(d)) sel.diff.delete(d); else sel.diff.add(d);
-    savePref(); renderHome();
-  });
-  $("#cntSeg").addEventListener("click", ev=>{
-    const b = ev.target.closest("[data-n]"); if(!b) return;
-    sel.count = +b.dataset.n; savePref(); renderHome();
-  });
-  $("#startBtn").onclick = ()=>{
-    const list = shuffle(pool().slice());
-    startQuiz(sel.count===0 ? list : list.slice(0, sel.count), {});
-  };
-  Object.keys(MOCK_MODES).forEach(k=>{ $("#mock_"+k).onclick = ()=> startMock(k); });
+  if(tab === "practice"){
+    $("#subjChips").addEventListener("click", ev=>{
+      const b = ev.target.closest("[data-subj]"); if(!b) return;
+      const id = b.dataset.subj;
+      if(sel.subj.has(id)) sel.subj.delete(id); else sel.subj.add(id);
+      savePref(); renderHome();
+    });
+    $("#subjAll").onclick = ()=>{
+      sel.subj = new Set(sel.subj.size===SUBJECTS.length ? [] : SUBJECTS.map(s=>s.id));
+      savePref(); renderHome();
+    };
+    $("#topicFold").onclick = ()=>{ topicsOpen = !topicsOpen; pref.topicsOpen = topicsOpen; savePref(); renderHome(); };
+    $("#topicAll").onclick = ()=>{
+      if(allTopicOn) visTopicList.forEach(t=>sel.topics.delete(t));
+      else visTopicList.forEach(t=>sel.topics.add(t));
+      savePref(); renderHome();
+    };
+    app.querySelectorAll("[data-topic]").forEach(b=> b.onclick = ()=>{
+      const t = b.dataset.topic;
+      if(sel.topics.has(t)) sel.topics.delete(t); else sel.topics.add(t);
+      savePref(); renderHome();
+    });
+    $("#diffChips").addEventListener("click", ev=>{
+      const b = ev.target.closest("[data-diff]"); if(!b) return;
+      const d = +b.dataset.diff;
+      if(sel.diff.has(d)) sel.diff.delete(d); else sel.diff.add(d);
+      savePref(); renderHome();
+    });
+    $("#cntSeg").addEventListener("click", ev=>{
+      const b = ev.target.closest("[data-n]"); if(!b) return;
+      sel.count = +b.dataset.n; savePref(); renderHome();
+    });
+    $("#startBtn").onclick = ()=>{
+      const list = shuffle(pool().slice());
+      startQuiz(sel.count===0 ? list : list.slice(0, sel.count), {});
+    };
+  }else{
+    Object.keys(MOCK_MODES).forEach(k=>{ $("#mock_"+k).onclick = ()=> startMock(k); });
+  }
   $("#noteBtn").onclick = renderNote;
   $("#histBtn").onclick = renderHistory;
   window.scrollTo(0,0);
