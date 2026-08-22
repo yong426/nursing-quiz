@@ -155,6 +155,7 @@ const MOCK_MODES = {
 let quiz = null;
 let examTimer = null;
 let noteSubj = "all";
+let noteDiff = "all";
 const EXAM_MIN = 105;   // 2025 CBT: 105문항 105분
 
 function stopClock(){ if(examTimer){ clearInterval(examTimer); examTimer = null; } }
@@ -586,19 +587,39 @@ function renderNote(){
   const m = wrongMap();
   const items = Object.entries(m).map(([id,e])=>({q:QBYID[id],e})).filter(x=>x.q)
     .sort((a,b)=> b.e.t - a.e.t);
-  const counts = {};
-  items.forEach(x=>{ counts[x.q.s]=(counts[x.q.s]||0)+1; });
-  if(noteSubj!=="all" && !counts[noteSubj]) noteSubj = "all";
-  const shown = noteSubj==="all" ? items : items.filter(x=>x.q.s===noteSubj);
+  // 필터가 가리키는 대상이 사라졌으면 전체로 되돌림
+  const hasSubj = s => items.some(x=>x.q.s===s);
+  const hasDiff = d => items.some(x=>qd(x.q)===d);
+  if(noteSubj!=="all" && !hasSubj(noteSubj)) noteSubj = "all";
+  if(noteDiff!=="all" && !hasDiff(+noteDiff)) noteDiff = "all";
+  // 각 필터의 개수는 '다른 필터'를 적용한 상태에서 계산 (교차 개수)
+  const bySubj = noteDiff==="all" ? items : items.filter(x=>qd(x.q)===+noteDiff);
+  const byDiff = noteSubj==="all" ? items : items.filter(x=>x.q.s===noteSubj);
+  const subjCnt = {}; bySubj.forEach(x=>{ subjCnt[x.q.s]=(subjCnt[x.q.s]||0)+1; });
+  const diffCnt = {}; byDiff.forEach(x=>{ diffCnt[qd(x.q)]=(diffCnt[qd(x.q)]||0)+1; });
+  const shown = items.filter(x=>
+    (noteSubj==="all" || x.q.s===noteSubj) && (noteDiff==="all" || qd(x.q)===+noteDiff));
+  const filterLabel = [
+    noteSubj==="all" ? null : subjName(noteSubj),
+    noteDiff==="all" ? null : DIFF_NAME[+noteDiff]
+  ].filter(Boolean).join(" · ");
   app.innerHTML = `
   ${tabsHtml("note")}
   <p class="sub" style="margin:-6px 0 12px">오답노트 ${items.length}문항</p>
   ${items.length?`
-  <div class="chips" style="margin-bottom:10px" id="noteChips">
-    <button class="chip ${noteSubj==="all"?"on":""}" data-ns="all">전체<small>${items.length}</small></button>
-    ${SUBJECTS.filter(s=>counts[s.id]).map(s=>`<button class="chip ${noteSubj===s.id?"on":""}" data-ns="${s.id}">${esc(s.name)}<small>${counts[s.id]}</small></button>`).join("")}
+  <div class="card" style="padding:12px 14px;margin-bottom:10px">
+    <h3 style="margin:0 0 6px">과목</h3>
+    <div class="chips" id="noteChips">
+      <button class="chip ${noteSubj==="all"?"on":""}" data-ns="all">전체<small>${bySubj.length}</small></button>
+      ${SUBJECTS.filter(s=>hasSubj(s.id)).map(s=>`<button class="chip ${noteSubj===s.id?"on":""}" data-ns="${s.id}"${subjCnt[s.id]?"":' style="opacity:.45"'}>${esc(s.name)}<small>${subjCnt[s.id]||0}</small></button>`).join("")}
+    </div>
+    <h3 style="margin:12px 0 6px">난이도</h3>
+    <div class="chips" id="noteDiffChips">
+      <button class="chip ${noteDiff==="all"?"on":""}" data-nd="all">전체<small>${byDiff.length}</small></button>
+      ${[1,2,3].filter(d=>hasDiff(d)).map(d=>`<button class="chip ${noteDiff===String(d)?"on":""}" data-nd="${d}"${diffCnt[d]?"":' style="opacity:.45"'}>${DIFF_NAME[d]}<small>${diffCnt[d]||0}</small></button>`).join("")}
+    </div>
   </div>
-  <button class="btn" id="retryAll" ${shown.length?"":"disabled"}>${noteSubj==="all"?"오답 전체 다시 풀기":esc(subjName(noteSubj))+" 오답 다시 풀기"} (${shown.length})</button>
+  <button class="btn" id="retryAll" ${shown.length?"":"disabled"}>${filterLabel?esc(filterLabel)+" 오답 다시 풀기":"오답 전체 다시 풀기"} (${shown.length})</button>
   <div style="margin:10px 0 4px">
     <label style="font-size:.82rem;color:var(--sub)">
       <input type="checkbox" id="autoRm" ${pref.autoRemove?"checked":""}> 다시 풀어 맞히면 자동 제거
@@ -609,14 +630,14 @@ function renderNote(){
       <div class="witem">
         <div class="info">
           <div class="t1">${esc(q.q)}</div>
-          <div class="t2"><span class="subj-tag">${esc(q.t)}</span> ${e.c}회 틀림 · ${new Date(e.t).toLocaleDateString("ko-KR")}</div>
+          <div class="t2"><span class="subj-tag">${esc(q.t)}</span> <span class="subj-tag">${DIFF_NAME[qd(q)]}</span> ${e.c}회 틀림 · ${new Date(e.t).toLocaleDateString("ko-KR")}</div>
         </div>
         <div class="acts">
           <button class="sm primary" data-solve="${q.id}">풀기</button>
           <button class="sm" data-view="${q.id}">해설</button>
           <button class="sm danger" data-del="${q.id}">삭제</button>
         </div>
-      </div>`).join("") : `<div class="empty" style="padding:16px 0">이 과목의 오답이 없습니다.</div>`}
+      </div>`).join("") : `<div class="empty" style="padding:16px 0">선택한 조건에 해당하는 오답이 없습니다.</div>`}
   </div>
   <button class="btn ghost" id="clearNote" style="color:var(--bad)">오답노트 전체 초기화</button>
   `:`<div class="empty">저장된 오답이 없습니다.<br>문제를 풀다 틀리면 자동으로 저장됩니다.</div>`}
@@ -626,6 +647,10 @@ function renderNote(){
     $("#noteChips").addEventListener("click", ev=>{
       const b = ev.target.closest("[data-ns]"); if(!b) return;
       noteSubj = b.dataset.ns; renderNote();
+    });
+    $("#noteDiffChips").addEventListener("click", ev=>{
+      const b = ev.target.closest("[data-nd]"); if(!b) return;
+      noteDiff = b.dataset.nd; renderNote();
     });
     $("#retryAll").onclick = ()=>{ if(shown.length) startQuiz(shuffle(shown.map(x=>x.q)), {fromNote:true}); };
     $("#autoRm").onchange = ev=>{ pref.autoRemove = ev.target.checked; savePref(); };
