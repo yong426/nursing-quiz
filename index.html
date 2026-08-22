@@ -33,10 +33,12 @@ h1{font-size:1.25rem;margin:8px 0 2px}
 .seg{display:flex;gap:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;width:fit-content}
 .seg button{border:0;background:var(--card);padding:8px 16px;font-size:.9rem;cursor:pointer;color:var(--ink)}
 .seg button.on{background:var(--acc);color:#fff}
-.tabs{display:flex;gap:8px;margin:0 0 14px}
-.tabs button{flex:1;border:1px solid var(--line);background:var(--card);color:var(--sub);
-  border-radius:12px;padding:12px 8px;font-size:.95rem;font-weight:700;cursor:pointer;
+.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 14px}
+@media (max-width:520px){ .tabs{grid-template-columns:repeat(2,1fr)} }
+.tabs button{border:1px solid var(--line);background:var(--card);color:var(--sub);
+  border-radius:12px;padding:12px 6px;font-size:.9rem;font-weight:700;cursor:pointer;
   box-shadow:var(--shadow);transition:background .12s,color .12s,border-color .12s}
+.tabs button .badge{margin-left:4px}
 .tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 .tabs button.on.exam{background:#134e8f;border-color:#134e8f}
 .btn{display:block;width:100%;border:0;border-radius:var(--r);padding:15px;font-size:1.05rem;
@@ -214,9 +216,37 @@ function sampleByTopic(poolQs, n, subjId){
   return picked;
 }
 
+/* ---------- 공통 탭 ---------- */
+const TABS = [
+  {k:"practice", label:"문제 풀이"},
+  {k:"mock",     label:"실전 모의고사", cls:"exam"},
+  {k:"note",     label:"오답노트"},
+  {k:"history",  label:"학습 기록"},
+];
+let homeTab = TABS.some(t=>t.k===pref.homeTab) ? pref.homeTab : "practice";
+
+function tabsHtml(active){
+  const wrongN = Object.keys(wrongMap()).length;
+  return `<div class="tabs" id="homeTabs">${TABS.map(t=>
+    `<button class="${t.cls||""} ${active===t.k?"on":""}" data-tab="${t.k}">${t.label}` +
+    (t.k==="note" && wrongN ? `<span class="badge">${wrongN}</span>` : "") + `</button>`).join("")}</div>`;
+}
+function bindTabs(){
+  const el = $("#homeTabs"); if(!el) return;
+  el.addEventListener("click", ev=>{
+    const b = ev.target.closest("[data-tab]"); if(!b) return;
+    goTab(b.dataset.tab);
+  });
+}
+function goTab(k){
+  homeTab = k; pref.homeTab = k; savePref();
+  if(k==="note") renderNote();
+  else if(k==="history") renderHistory();
+  else renderHome();
+}
+
 /* ---------- home ---------- */
 let topicsOpen = pref.topicsOpen !== false;
-let homeTab = (pref.homeTab === "mock") ? "mock" : "practice";
 function renderHome(){
   quiz = null; document.onkeydown = null; stopClock();
   const wrongN = Object.keys(wrongMap()).length;
@@ -230,15 +260,12 @@ function renderHome(){
   const visTopicList = visTopics.flatMap(s=>TOPICS[s.id]||[]);
   const allTopicOn = visTopicList.every(t=>sel.topics.has(t));
 
-  const tab = homeTab;
+  const tab = (homeTab === "mock") ? "mock" : "practice";
   app.innerHTML = `
   <h1>간호조무사 모의 문제은행</h1>
   <p class="sub">국가시험 대비 자체 제작 ${DATA.questions.length}문항 · 5지선다 · 해설 포함</p>
 
-  <div class="tabs" id="homeTabs">
-    <button class="${tab==="practice"?"on":""}" data-tab="practice">문제 풀이</button>
-    <button class="exam ${tab==="mock"?"on":""}" data-tab="mock">실전 모의고사</button>
-  </div>
+  ${tabsHtml(tab)}
 
   ${tab!=="practice" ? "" : `
   <div class="card">
@@ -297,27 +324,21 @@ function renderHome(){
     <p class="hint" style="margin:0;padding-top:4px;border-top:1px solid var(--line)">
       두 모드 모두 세부주제 비례 배분이 적용되며, '문제 풀이' 탭의 필터 설정과 무관하게 전 범위에서 출제됩니다.</p>
   </div>
-  ${(()=>{ const ms = load(LS_HIST,[]).filter(h=>h.mock).slice(0,3);
+  ${(()=>{ const all = load(LS_HIST,[]); const ms = all.filter(h=>h.mock).slice(0,3);
     return ms.length ? `<div class="card"><h2>최근 모의고사 결과</h2>${ms.map(h=>{
       const d = new Date(h.t), pct = h.n?Math.round(h.ok/h.n*100):0, pass = h.ok >= Math.ceil(h.n*0.6);
-      return `<div class="witem"><div class="info">
+      return `<div class="witem" data-sess="${all.indexOf(h)}" style="cursor:pointer"><div class="info">
         <div class="t1">${h.ok} / ${h.n} 문항 <span style="color:${pass?"var(--ok)":"var(--bad)"}">(${pct}% · ${pass?"합격선 통과":"합격선 미달"})</span></div>
         <div class="t2">${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}${h.mode&&MOCK_MODES[h.mode]?" · "+esc(MOCK_MODES[h.mode].label)+" 모드":""}</div>
-      </div></div>`; }).join("")}</div>` : ""; })()}
+      </div><div class="acts"><span style="color:var(--sub);font-size:1.1rem">›</span></div></div>`; }).join("")}
+      <p class="hint">세션을 누르면 과목별 점수를 볼 수 있습니다.</p></div>` : ""; })()}
   `}
-
-  <div class="rowbtns" style="margin-top:10px">
-    <button class="btn ghost" id="noteBtn">오답노트${wrongN?`<span class="badge">${wrongN}</span>`:""}</button>
-    <button class="btn ghost" id="histBtn">학습 기록</button>
-  </div>
 
   <p class="footer">본 문제은행은 간호조무사 국가시험 형식에 맞춰 자체 제작한 학습용 모의문제입니다.<br>
   실제 기출문제가 아니며, 해설은 참고용으로 오류가 있을 수 있습니다.</p>`;
 
-  $("#homeTabs").addEventListener("click", ev=>{
-    const b = ev.target.closest("[data-tab]"); if(!b) return;
-    homeTab = b.dataset.tab; pref.homeTab = homeTab; savePref(); renderHome();
-  });
+  bindTabs();
+  app.querySelectorAll("[data-sess]").forEach(el=> el.onclick = ()=> renderSessionDetail(+el.dataset.sess, "mock"));
   if(tab === "practice"){
     $("#subjChips").addEventListener("click", ev=>{
       const b = ev.target.closest("[data-subj]"); if(!b) return;
@@ -354,11 +375,9 @@ function renderHome(){
       const list = shuffle(pool().slice());
       startQuiz(sel.count===0 ? list : list.slice(0, sel.count), {});
     };
-  }else{
+  }else if(tab === "mock"){
     Object.keys(MOCK_MODES).forEach(k=>{ $("#mock_"+k).onclick = ()=> startMock(k); });
   }
-  $("#noteBtn").onclick = renderNote;
-  $("#histBtn").onclick = renderHistory;
   window.scrollTo(0,0);
 }
 
@@ -471,6 +490,7 @@ function renderResult(){
   const unanswered = total - n;
   const full = quiz.mock;   // 모의고사는 미응답을 오답으로 집계
   const subjStat = {};
+  const diffStat = {};
   const wrongs = [];
   quiz.list.forEach((q,i)=>{
     const a = quiz.answers[i];
@@ -478,6 +498,9 @@ function renderResult(){
     const s = subjStat[q.s] || (subjStat[q.s]={ok:0,all:0});
     s.all++;
     if(a && a.ok) s.ok++;
+    const dstat = diffStat[qd(q)] || (diffStat[qd(q)]={ok:0,all:0});
+    dstat.all++;
+    if(a && a.ok) dstat.ok++;
     if(a && !a.ok) wrongs.push({q, pick:a.pick});
   });
   const denom = full ? total : n;
@@ -498,7 +521,9 @@ function renderResult(){
   if(!quiz.saved && n>0){
     quiz.saved = true;
     saveSession({t:Date.now(), n:denom, ok:okN, mock:quiz.mock, mode:quiz.mode, note:quiz.fromNote,
-      subj:[...new Set(quiz.list.slice(0, full?total:quiz.answers.length).map(q=>subjName(q.s)))].slice(0,4)});
+      subj:[...new Set(quiz.list.slice(0, full?total:quiz.answers.length).map(q=>subjName(q.s)))].slice(0,4),
+      bs:Object.fromEntries(Object.entries(subjStat).map(([k,v])=>[k,[v.ok,v.all]])),
+      bd:Object.fromEntries(Object.entries(diffStat).map(([k,v])=>[k,[v.ok,v.all]]))});
   }
   app.innerHTML = `
   <h1>채점 결과${quiz.mock && quiz.mode ? ` <span class="subj-tag" style="font-size:.8rem;vertical-align:3px">실전 ${esc(MOCK_MODES[quiz.mode].label)} 모드</span>` : ""}</h1>
@@ -535,8 +560,8 @@ function renderResult(){
     <button class="btn" id="noteBtn">오답노트${wrongs.length?" 복습":""}</button>
   </div>`;
   app.querySelectorAll("[data-view]").forEach(b=> b.onclick = ()=> viewOne(b.dataset.view, renderResult));
-  $("#homeBtn").onclick = renderHome;
-  $("#noteBtn").onclick = renderNote;
+  $("#homeBtn").onclick = ()=> goTab(quiz.mock ? "mock" : "practice");
+  $("#noteBtn").onclick = ()=> goTab("note");
   window.scrollTo(0,0);
 }
 
@@ -566,8 +591,8 @@ function renderNote(){
   if(noteSubj!=="all" && !counts[noteSubj]) noteSubj = "all";
   const shown = noteSubj==="all" ? items : items.filter(x=>x.q.s===noteSubj);
   app.innerHTML = `
-  <div class="topbar"><button class="sm" id="backBtn">← 홈</button>
-    <span class="meta">오답노트 ${items.length}문항</span></div>
+  ${tabsHtml("note")}
+  <p class="sub" style="margin:-6px 0 12px">오답노트 ${items.length}문항</p>
   ${items.length?`
   <div class="chips" style="margin-bottom:10px" id="noteChips">
     <button class="chip ${noteSubj==="all"?"on":""}" data-ns="all">전체<small>${items.length}</small></button>
@@ -596,7 +621,7 @@ function renderNote(){
   <button class="btn ghost" id="clearNote" style="color:var(--bad)">오답노트 전체 초기화</button>
   `:`<div class="empty">저장된 오답이 없습니다.<br>문제를 풀다 틀리면 자동으로 저장됩니다.</div>`}
   `;
-  $("#backBtn").onclick = renderHome;
+  bindTabs();
   if(items.length){
     $("#noteChips").addEventListener("click", ev=>{
       const b = ev.target.closest("[data-ns]"); if(!b) return;
@@ -618,6 +643,68 @@ function renderNote(){
   window.scrollTo(0,0);
 }
 
+/* ---------- 세션 상세 ---------- */
+function sessionLabel(h){
+  const d = new Date(h.t);
+  return `${d.getFullYear()}. ${d.getMonth()+1}. ${d.getDate()}. ` +
+         `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+}
+function renderSessionDetail(idx, backTab){
+  document.onkeydown = null; stopClock();
+  const h = load(LS_HIST, [])[idx];
+  if(!h){ goTab(backTab||"history"); return; }
+  const pct = h.n ? Math.round(h.ok/h.n*100) : 0;
+  const kind = h.mock ? `실전 모의고사${h.mode&&MOCK_MODES[h.mode]?" · "+esc(MOCK_MODES[h.mode].label)+" 모드":""}`
+                      : (h.note ? "오답노트 복습" : "문제 풀이");
+  let passHtml = "";
+  if(h.mock && h.bs){
+    const cut = Math.ceil(h.n*0.6);
+    const fails = Object.entries(h.bs).filter(([,v])=> v[0] < Math.ceil(v[1]*0.4)).map(([k])=>subjName(k));
+    const pass = h.ok >= cut && fails.length===0;
+    passHtml = `<div class="passband ${pass?"pass":"fail"}">${pass?"🎉 합격 기준 통과":"불합격 기준"}
+      (합격선 ${cut}점${fails.length?` · 과락: ${fails.map(esc).join(", ")}`:""})</div>`;
+  }
+  app.innerHTML = `
+  <div class="topbar"><button class="sm" id="backBtn">← 돌아가기</button>
+    <span class="meta">${esc(kind)}<br>${sessionLabel(h)}</span></div>
+  <div class="card">
+    <div class="score">${h.ok} / ${h.n} <small>문항</small></div>
+    <div style="text-align:center;color:var(--sub);font-size:.95rem">정답률 ${pct}%</div>
+    ${passHtml}
+  </div>
+  ${h.bs ? `
+  <div class="card">
+    <h2>과목별 점수</h2>
+    <table class="tbl"><tr><th>과목</th><th style="width:42%"></th><th style="text-align:right">정답 / 문항</th></tr>
+    ${SUBJECTS.filter(s=>h.bs[s.id]).map(s=>{
+      const [ok,all] = h.bs[s.id], p = Math.round(ok/all*100);
+      const gwarak = h.mock && ok < Math.ceil(all*0.4);
+      return `<tr><td>${esc(s.name)}${gwarak?' <span style="color:var(--bad);font-weight:800;font-size:.78rem">과락</span>':""}</td>
+        <td><div style="background:var(--line);border-radius:4px;height:10px;overflow:hidden">
+          <div style="width:${p}%;height:100%;background:${p>=70?"var(--ok)":p>=40?"#e8a23d":"var(--bad)"}"></div></div></td>
+        <td class="num">${ok} / ${all} (${p}%)</td></tr>`;
+    }).join("")}
+    </table>
+  </div>
+  ${h.bd ? `
+  <div class="card">
+    <h2>난이도별 정답률</h2>
+    <table class="tbl">
+    ${[1,2,3].filter(d=>h.bd[d]).map(d=>{
+      const [ok,all] = h.bd[d], p = Math.round(ok/all*100);
+      return `<tr><td>${DIFF_NAME[d]}</td>
+        <td style="width:42%"><div style="background:var(--line);border-radius:4px;height:10px;overflow:hidden">
+          <div style="width:${p}%;height:100%;background:${p>=70?"var(--ok)":p>=40?"#e8a23d":"var(--bad)"}"></div></div></td>
+        <td class="num">${ok} / ${all} (${p}%)</td></tr>`;
+    }).join("")}
+    </table>
+  </div>` : ""}
+  ` : `<div class="empty">이 세션은 과목별 상세가 기록되기 전에 완료되어 세부 점수를 볼 수 없습니다.<br>
+    이후 완료하는 세션부터 과목·난이도별 점수가 표시됩니다.</div>`}`;
+  $("#backBtn").onclick = ()=> goTab(backTab || "history");
+  window.scrollTo(0,0);
+}
+
 /* ---------- history ---------- */
 function renderHistory(){
   document.onkeydown = null; stopClock();
@@ -633,8 +720,7 @@ function renderHistory(){
   const totW = Object.values(subjAcc).reduce((a,e)=>a+e.w,0);
   const tot = totR + totW;
   app.innerHTML = `
-  <div class="topbar"><button class="sm" id="backBtn">← 홈</button>
-    <span class="meta">학습 기록</span></div>
+  ${tabsHtml("history")}
   <div class="card">
     <h2>누적 통계</h2>
     ${tot?`
@@ -661,17 +747,21 @@ function renderHistory(){
       const d = new Date(h.t);
       const dt = `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
       const pct = h.n?Math.round(h.ok/h.n*100):0;
-      return `<div class="witem">
+      const i = hist.indexOf(h);
+      return `<div class="witem" data-sess="${i}" style="cursor:pointer">
         <div class="info">
           <div class="t1">${h.ok} / ${h.n} 문항 <span style="color:${pct>=70?"var(--ok)":pct>=40?"#e8a23d":"var(--bad)"}">(${pct}%)</span>${h.mock?` <span class="subj-tag">실전${h.mode&&MOCK_MODES[h.mode]?" "+esc(MOCK_MODES[h.mode].label):""}</span>`:""}${h.note?' <span class="subj-tag">오답복습</span>':""}</div>
           <div class="t2">${dt} · ${(h.subj||[]).map(esc).join(", ")}${(h.subj||[]).length>=4?" 외":""}</div>
         </div>
+        <div class="acts"><span style="color:var(--sub);font-size:1.1rem">›</span></div>
       </div>`;
     }).join("") : `<div class="empty" style="padding:16px 0">완료한 세션이 없습니다.</div>`}
+    ${hist.length?`<p class="hint">세션을 누르면 과목별·난이도별 점수를 볼 수 있습니다.</p>`:""}
   </div>
   ${(hist.length||tot)?`<button class="btn ghost" id="clearHist" style="color:var(--bad)">기록 전체 초기화</button>`:""}
   `;
-  $("#backBtn").onclick = renderHome;
+  bindTabs();
+  app.querySelectorAll("[data-sess]").forEach(el=> el.onclick = ()=> renderSessionDetail(+el.dataset.sess, "history"));
   const cb = $("#clearHist");
   if(cb) cb.onclick = ()=>{
     if(confirm("학습 기록과 누적 통계를 모두 삭제할까요? (오답노트는 유지됩니다)")){
@@ -685,7 +775,7 @@ function renderHistory(){
 if(!DATA.questions.length){
   app.innerHTML = `<div class="empty">문항 데이터(data.js)를 불러오지 못했습니다.</div>`;
 }else{
-  renderHome();
+  goTab(homeTab);
 }
 </script>
 </body>
