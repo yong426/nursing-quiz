@@ -22,6 +22,20 @@ VERSION_JSON = os.path.join(ROOT, "version.json")
 sys.path.insert(0, HERE)
 from validate import TOPIC2SUBJ, norm, BAD_CHOICE   # noqa
 
+DIFF_WORD = {"쉬움": 1, "중간": 2, "어려움": 3}
+
+
+def file_diff(path):
+    """파일명 끝의 목표 난이도(..._어려움.json)를 읽는다. 없으면 None.
+
+    생성 모델이 문항에 d를 넣어주지 않는 경우가 있어(배치 단위로 난이도를 지정해 생성하므로)
+    파일명이 사실상의 난이도 라벨이다. 둘 다 없으면 조용히 '중간'으로 떨어뜨리지 않고 중단한다 —
+    그렇게 되면 난이도 배합과 실전 모의고사 쿼터가 통째로 망가진다.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    m = re.search(r"_(쉬움|중간|어려움)$", stem)
+    return DIFF_WORD[m.group(1)] if m else None
+
 
 def read_data():
     raw = open(DATA_JS, encoding="utf-8").read()
@@ -75,9 +89,24 @@ def main():
     batch = 1 + max([int(m.group(1)) for m in
                      (re.match(r"^m(\d+)-", i) for i in used_ids) if m] or [0])
 
+    # 난이도 확보 여부를 먼저 전부 확인한다 (조용히 '중간'으로 떨어지면 배합이 망가진다)
+    nodiff = []
+    for p in paths:
+        items = json.load(open(p, encoding="utf-8"))
+        if file_diff(p) is None and any(it.get("d") not in (1, 2, 3) for it in items):
+            nodiff.append(os.path.basename(p))
+    if nodiff:
+        print("✗ 난이도를 알 수 없는 파일이 있다. 문항에 \"d\":1|2|3 을 넣거나,")
+        print("  파일명을 '..._쉬움.json' / '..._중간.json' / '..._어려움.json' 으로 바꿔라:")
+        for n in nodiff[:20]:
+            print("   -", n)
+        return 1
+
     added, skipped = 0, []
+    diff_src = collections.Counter()
     for fi, p in enumerate(paths, 1):
         items = json.load(open(p, encoding="utf-8"))
+        fdiff = file_diff(p)
         for i, it in enumerate(items, 1):
             # 안전장치: 스키마·중복 재검사
             if it.get("t") not in TOPIC2SUBJ or len(it.get("c", [])) != 5 \
@@ -93,12 +122,18 @@ def main():
             while qid in used_ids:   # 이론상 발생하지 않지만 안전장치
                 qid += "x"
             used_ids.add(qid); existing_norm[key] = qid
+            # 난이도: 문항에 d가 있으면 그것을, 없으면 파일명의 목표 난이도를 쓴다
             d = it.get("d")
+            if d in (1, 2, 3):
+                diff_src["문항 d"] += 1
+            else:
+                d = fdiff
+                diff_src["파일명"] += 1
             qs.append({
                 "id": qid, "s": TOPIC2SUBJ[it["t"]], "t": it["t"],
                 "q": str(it["q"]).strip(), "c": [str(c).strip() for c in it["c"]],
                 "ans": it["ans"], "exp": str(it["exp"]).strip(),
-                "d": d if d in (1, 2, 3) else 2,
+                "d": d,
             })
             added += 1
 
@@ -107,6 +142,12 @@ def main():
     print(f"{before} → {len(qs)}문항 (추가 {added}, 건너뜀 {len(skipped)})")
     print("과목별:", dict(per_subj))
     print("난이도:", dict(sorted(per_diff.items())), " (1쉬움 2중간 3어려움)")
+    print("난이도 출처:", dict(diff_src))
+    # 과목×난이도 표 — 실전 모의고사 무중복 회차를 결정하는 표라 눈으로 확인할 가치가 있다
+    print("과목×난이도:")
+    for s in ("기초", "보건", "공중", "실기"):
+        cell = collections.Counter(q.get("d", 2) for q in qs if q["s"] == s)
+        print(f"  {s}: 쉬움 {cell[1]:4d} · 중간 {cell[2]:4d} · 어려움 {cell[3]:4d}")
     for s in skipped[:20]:
         print("  - 건너뜀:", s)
 

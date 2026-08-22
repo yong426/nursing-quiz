@@ -1,3 +1,4 @@
 __pycache__/
 *.pyc
-tools/incoming/*.json
+# 생성한 원본 문항과 검수 적용 전 백업 — 리포에 넣지 않는다 (tools/backup_incoming.py로 별도 보관)
+tools/incoming/

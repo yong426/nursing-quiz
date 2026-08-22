@@ -128,7 +128,7 @@ h1{font-size:1.25rem;margin:8px 0 2px}
 <div class="wrap" id="app"></div>
 <div class="toast" id="toast"></div>
 
-<script src="data.js?v=1369"></script>
+<script src="data.js?v=2370"></script>
 <script>
 "use strict";
 const $ = sel => document.querySelector(sel);
@@ -140,8 +140,9 @@ const LS_PREF  = "naq_pref_v1";
 const LS_HIST  = "naq_hist_v1";
 const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
+const LS_RECENT = "naq_recent_v1";   // 최근 출제 이력(회차 순번) — 같은 문항이 연달아 나오지 않게
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.22.11";
+const APP_VERSION = "2026.08.22.12";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
@@ -254,6 +255,40 @@ function pool(){
   return DATA.questions.filter(q => sel.subj.has(q.s) && sel.topics.has(q.t) && sel.diff.has(qd(q)));
 }
 
+/* ---------- 최근 출제 회피 (LRU) ----------
+   문항마다 '몇 번째 세션에 나왔는지'를 기록해 두고, 뽑을 때 순번이 낮은(=오래됐거나 아직 안 나온)
+   문항을 먼저 쓴다. 과목→난이도→세부주제 층화 배분은 그대로 두고 각 칸 안에서 '누구를 뽑을지'만 바꾸므로
+   출제 비중은 달라지지 않는다. 풀이 모자라면 자연히 오래된 문항이 재사용된다(막히지 않는다). */
+let _recent = null;
+function recentLog(){
+  if(_recent) return _recent;
+  const r = load(LS_RECENT, null);
+  _recent = (r && r.m) ? r : {seq:0, m:{}};
+  return _recent;
+}
+function saveRecent(r){ _recent = r; save(LS_RECENT, r); }
+function markServed(list){
+  const r = recentLog();
+  r.seq++;
+  list.forEach(q=>{ r.m[q.id] = r.seq; });
+  Object.keys(r.m).forEach(id=>{ if(!QBYID[id]) delete r.m[id]; });   // 교체·삭제된 문항 정리
+  saveRecent(r);
+}
+function servedCount(){ const m = recentLog().m; return Object.keys(m).filter(id=>QBYID[id]).length; }
+function freshHint(){
+  const total = DATA.questions.length, seen = servedCount();
+  return `<b>최근 출제 회피</b> — 한 번 나온 문항은 뒤로 미루고 오래된 문항·아직 안 나온 문항을 먼저 뽑습니다. `
+    + (seen ? `지금까지 ${seen}문항이 출제됐고 <b>${total-seen}문항</b>이 아직 남아 있습니다.`
+            : `아직 출제 이력이 없어 ${total}문항 전체가 대상입니다.`);
+}
+/* 오래된 것 우선, 같은 순번끼리는 무작위 (먼저 섞고 안정 정렬하면 동순위 안에서 순서가 무작위로 남는다) */
+function pickLRU(arr, n){
+  if(n <= 0 || !arr.length) return [];
+  if(n >= arr.length) return shuffle(arr.slice());
+  const m = recentLog().m;
+  return shuffle(arr.slice()).sort((a,b)=> (m[a.id]||0) - (m[b.id]||0)).slice(0, n);
+}
+
 /* 최대 잔여법으로 정수 배분: items=[{key, share}] → {key: n}, 합계 = total */
 function allocate(items, total){
   const out = items.map(x=>({...x, n: Math.floor(x.share)}));
@@ -308,7 +343,7 @@ function buildPracticeList(n){
   }
   // 전체 부족분 보충
   if(picked.length < plan.total){
-    shuffle(p.filter(q=>!usedIds.has(q.id))).slice(0, plan.total - picked.length)
+    pickLRU(p.filter(q=>!usedIds.has(q.id)), plan.total - picked.length)
       .forEach(q=>{ usedIds.add(q.id); picked.push(q); });
   }
   return shuffle(picked);
@@ -328,10 +363,10 @@ function sampleByTopic(poolQs, n, subjId){
   quotas.sort((a,b)=>(b.share-b.n)-(a.share-a.n));
   for(let i=0; used<n && i<quotas.length; i++, used++) quotas[i].n++;
   let picked = [];
-  quotas.forEach(x=>{ picked = picked.concat(shuffle(byTopic[x.t].slice()).slice(0, x.n)); });
+  quotas.forEach(x=>{ picked = picked.concat(pickLRU(byTopic[x.t], x.n)); });
   if(picked.length < n){
     const ids = new Set(picked.map(q=>q.id));
-    picked = picked.concat(shuffle(poolQs.filter(q=>!ids.has(q.id))).slice(0, n-picked.length));
+    picked = picked.concat(pickLRU(poolQs.filter(q=>!ids.has(q.id)), n-picked.length));
   }
   return picked;
 }
@@ -441,7 +476,8 @@ function renderHome(){
       ? "선택 범위의 모든 문항이 출제됩니다."
       : `실전 배분 적용 — 과목 ${sTxt} / 난이도 ${dTxt}`}<br>
       실전 하드 모드와 같은 비중(쉬움 20 · 중간 50 · 어려움 30%)과 과목·세부주제 비율을 따르며,
-      선택하지 않은 과목·난이도는 제외하고 남은 항목으로 비율을 다시 맞춥니다.</p>`;
+      선택하지 않은 과목·난이도는 제외하고 남은 항목으로 비율을 다시 맞춥니다.<br>
+      ${freshHint()}</p>`;
   })()}
   `}
 
@@ -462,7 +498,8 @@ function renderHome(){
       <button class="btn exam" id="mock_${k}" style="margin-bottom:6px">${m.label} 모드 <span style="font-weight:500;opacity:.85">· ${esc(m.sub)}</span></button>
       <p class="hint" style="margin:0 0 14px">${esc(m.desc)}</p>`).join("")}
     <p class="hint" style="margin:0;padding-top:4px;border-top:1px solid var(--line)">
-      두 모드 모두 세부주제 비례 배분이 적용되며, '문제 풀이' 탭의 필터 설정과 무관하게 전 범위에서 출제됩니다.</p>
+      두 모드 모두 세부주제 비례 배분이 적용되며, '문제 풀이' 탭의 필터 설정과 무관하게 전 범위에서 출제됩니다.<br>
+      ${freshHint()}</p>
   </div>
   ${(()=>{ const all = load(LS_HIST,[]); const ms = all.filter(h=>h.mock).slice(0,3);
     return ms.length ? `<div class="card"><h2>최근 모의고사 결과</h2>${ms.map(h=>{
@@ -561,6 +598,7 @@ function startQuiz(list, opts){
   if(!list.length){ toast("출제할 문항이 없습니다"); return; }
   quiz = {list: shuffleChoices(list), idx:0, answers:[], fromNote:!!opts.fromNote, fromStar:!!opts.fromStar,
           mock:!!opts.mock, mode:opts.mode||null, defer:!!opts.defer};
+  markServed(quiz.list);   // 다음 회차에서 이 문항들을 뒤로 미루기 위한 출제 이력 (이어서 풀기는 재기록 안 함)
   if(quiz.mock) quiz.deadline = Date.now() + EXAM_MIN*60*1000;
   renderQ();
 }
@@ -1190,13 +1228,29 @@ function renderHistory(){
     }).join("") : `<div class="empty" style="padding:16px 0">완료한 세션이 없습니다.</div>`}
     ${hist.length?`<p class="hint">세션을 누르면 과목별·난이도별 점수를 볼 수 있습니다.</p>`:""}
   </div>
+  ${(()=>{ const seen = servedCount(), total = DATA.questions.length;
+    return `<div class="card">
+      <h2>출제 이력 <span style="color:var(--sub);font-weight:500;font-size:.8rem">${seen} / ${total}문항</span></h2>
+      <div style="background:var(--line);border-radius:4px;height:10px;overflow:hidden;margin-bottom:10px">
+        <div style="width:${total?Math.round(seen/total*100):0}%;height:100%;background:var(--acc)"></div></div>
+      <p class="hint" style="margin:0">한 번 나온 문항은 다른 문항이 한 바퀴 돌 때까지 뒤로 미뤄집니다.
+        아직 안 나온 문항이 <b>${total-seen}개</b> 남아 있습니다.
+        ${seen?"초기화하면 전 범위를 처음 보는 것처럼 다시 순환합니다 (오답노트·별표·학습 기록은 그대로).":""}</p>
+      ${seen?`<button class="btn ghost" id="clearRecent" style="margin-top:10px">출제 이력 초기화</button>`:""}
+    </div>`; })()}
   ${(hist.length||tot)?`<button class="btn ghost" id="clearHist" style="color:var(--bad)">기록 전체 초기화</button>`:""}
   `;
   bindTabs();
   app.querySelectorAll("[data-sess]").forEach(el=> el.onclick = ()=> renderSessionDetail(+el.dataset.sess, "history"));
+  const rb = $("#clearRecent");
+  if(rb) rb.onclick = ()=>{
+    if(confirm("출제 이력을 초기화할까요?\n\n다음 출제부터 전 범위가 '아직 안 나온 문항'으로 취급됩니다.\n오답노트·별표·학습 기록·누적 통계는 삭제되지 않습니다.")){
+      localStorage.removeItem(LS_RECENT); _recent = null; toast("출제 이력을 초기화했습니다"); renderHistory();
+    }
+  };
   const cb = $("#clearHist");
   if(cb) cb.onclick = ()=>{
-    if(confirm("학습 기록과 누적 통계를 모두 삭제할까요? (오답노트는 유지됩니다)")){
+    if(confirm("학습 기록과 누적 통계를 모두 삭제할까요? (오답노트·별표·출제 이력은 유지됩니다)")){
       localStorage.removeItem(LS_HIST); localStorage.removeItem(LS_STAT); renderHistory();
     }
   };
