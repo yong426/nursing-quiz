@@ -118,12 +118,15 @@ const SUBJECTS = DATA.subjects;                    // [{id, name, mock}] mock = 
 const TOPICS = DATA.topics;                        // {subjectId: [topic,...]}
 const QBYID = Object.fromEntries(DATA.questions.map(q=>[q.id,q]));
 
-let pref = load(LS_PREF, {subj:null, topics:null, count:20, autoRemove:true, topicsOpen:true});
+let pref = load(LS_PREF, {subj:null, topics:null, count:20, autoRemove:true, topicsOpen:true, diff:null});
 let sel = {
   subj: new Set(pref.subj || SUBJECTS.map(s=>s.id)),
   topics: new Set(pref.topics || Object.values(TOPICS).flat()),
-  count: pref.count || 20
+  count: pref.count || 20,
+  diff: new Set(Array.isArray(pref.diff) && pref.diff.length ? pref.diff : [1,2,3])
 };
+const DIFF_NAME = {1:"쉬움", 2:"중간", 3:"어려움"};
+const qd = q => q.d || 2;
 let quiz = null;
 let examTimer = null;
 let noteSubj = "all";
@@ -149,7 +152,7 @@ function startClock(){ stopClock(); examTimer = setInterval(tickClock, 1000); ti
 
 function load(k,d){ try{ const v=JSON.parse(localStorage.getItem(k)); return v==null?d:v; }catch(e){ return d; } }
 function save(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
-function savePref(){ save(LS_PREF,{subj:[...sel.subj], topics:[...sel.topics], count:sel.count, autoRemove:pref.autoRemove, topicsOpen:pref.topicsOpen}); }
+function savePref(){ save(LS_PREF,{subj:[...sel.subj], topics:[...sel.topics], count:sel.count, autoRemove:pref.autoRemove, topicsOpen:pref.topicsOpen, diff:[...sel.diff]}); }
 function wrongMap(){ return load(LS_WRONG,{}); }
 function setWrong(m){ save(LS_WRONG,m); }
 function addWrong(q,picked){ const m=wrongMap(); const e=m[q.id]||{c:0}; e.c++; e.t=Date.now(); e.p=picked; m[q.id]=e; setWrong(m); }
@@ -163,7 +166,29 @@ function esc(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",
 function subjName(id){ const s=SUBJECTS.find(s=>s.id===id); return s?s.name:id; }
 
 function pool(){
-  return DATA.questions.filter(q => sel.subj.has(q.s) && sel.topics.has(q.t));
+  return DATA.questions.filter(q => sel.subj.has(q.s) && sel.topics.has(q.t) && sel.diff.has(qd(q)));
+}
+
+/* 주어진 풀에서 n개를 주제 비례(정수 몫+최대 잔여)로 추출 */
+function sampleByTopic(poolQs, n, subjId){
+  if(n <= 0 || !poolQs.length) return [];
+  if(n >= poolQs.length) return poolQs.slice();
+  const byTopic = {};
+  poolQs.forEach(q=>{ (byTopic[q.t] = byTopic[q.t]||[]).push(q); });
+  const quotas = (TOPICS[subjId]||Object.keys(byTopic)).filter(t=>byTopic[t]).map(t=>{
+    const share = byTopic[t].length * n / poolQs.length;
+    return {t, share, n: Math.floor(share)};
+  });
+  let used = quotas.reduce((a,x)=>a+x.n, 0);
+  quotas.sort((a,b)=>(b.share-b.n)-(a.share-a.n));
+  for(let i=0; used<n && i<quotas.length; i++, used++) quotas[i].n++;
+  let picked = [];
+  quotas.forEach(x=>{ picked = picked.concat(shuffle(byTopic[x.t].slice()).slice(0, x.n)); });
+  if(picked.length < n){
+    const ids = new Set(picked.map(q=>q.id));
+    picked = picked.concat(shuffle(poolQs.filter(q=>!ids.has(q.id))).slice(0, n-picked.length));
+  }
+  return picked;
 }
 
 /* ---------- home ---------- */
@@ -208,6 +233,16 @@ function renderHome(){
   </div>
 
   <div class="card">
+    <h2>난이도</h2>
+    <div class="chips" id="diffChips">
+      ${[1,2,3].map(d=>{
+        const cnt = DATA.questions.filter(q=>qd(q)===d).length;
+        return `<button class="chip ${sel.diff.has(d)?"on":""}" data-diff="${d}">${DIFF_NAME[d]}<small>${cnt}</small></button>`;
+      }).join("")}
+    </div>
+  </div>
+
+  <div class="card">
     <h2>문항 수</h2>
     <div class="seg" id="cntSeg">
       ${[10,20,30,50].map(n=>`<button data-n="${n}" class="${sel.count===n?"on":""}">${n}</button>`).join("")}
@@ -248,6 +283,12 @@ function renderHome(){
     if(sel.topics.has(t)) sel.topics.delete(t); else sel.topics.add(t);
     savePref(); renderHome();
   });
+  $("#diffChips").addEventListener("click", ev=>{
+    const b = ev.target.closest("[data-diff]"); if(!b) return;
+    const d = +b.dataset.diff;
+    if(sel.diff.has(d)) sel.diff.delete(d); else sel.diff.add(d);
+    savePref(); renderHome();
+  });
   $("#cntSeg").addEventListener("click", ev=>{
     const b = ev.target.closest("[data-n]"); if(!b) return;
     sel.count = +b.dataset.n; savePref(); renderHome();
@@ -257,25 +298,29 @@ function renderHome(){
     startQuiz(sel.count===0 ? list : list.slice(0, sel.count), {});
   };
   $("#mockBtn").onclick = ()=>{
-    // 실전 배분: 과목별 mock 문항수를 세부주제별로 비례 배분(층화 추출, 필터 무시)
+    // 실전 배분: 과목별 mock 문항수 → 난이도(쉬움20/중간50/어려움30) → 주제 비례 이중 층화 (필터 무시)
+    const DIFF_MIX = {1:0.2, 2:0.5, 3:0.3};
     let list = [];
     for(const s of SUBJECTS){
       const subjQs = DATA.questions.filter(q=>q.s===s.id);
-      const byTopic = {};
-      subjQs.forEach(q=>{ (byTopic[q.t] = byTopic[q.t]||[]).push(q); });
-      // 주제별 정수 몫 + 최대 잔여 배분으로 정확히 s.mock개
-      const quotas = (TOPICS[s.id]||Object.keys(byTopic)).map(t=>{
-        const share = (byTopic[t]||[]).length * s.mock / subjQs.length;
-        return {t, share, n: Math.floor(share)};
+      const dq = [1,2,3].map(d=>{
+        const share = s.mock * DIFF_MIX[d];
+        return {d, share, n: Math.floor(share)};
       });
-      let used = quotas.reduce((a,x)=>a+x.n, 0);
-      quotas.sort((a,b)=>(b.share-b.n)-(a.share-a.n));
-      for(let i=0; used<s.mock && i<quotas.length; i++, used++) quotas[i].n++;
+      let used = dq.reduce((a,x)=>a+x.n, 0);
+      dq.sort((a,b)=>(b.share-b.n)-(a.share-a.n));
+      for(let i=0; used<s.mock; i++, used++) dq[i%dq.length].n++;
       let picked = [];
-      quotas.forEach(x=>{ picked = picked.concat(shuffle((byTopic[x.t]||[]).slice()).slice(0, x.n)); });
-      if(picked.length < s.mock){
-        const ids = new Set(picked.map(q=>q.id));
-        picked = picked.concat(shuffle(subjQs.filter(q=>!ids.has(q.id))).slice(0, s.mock-picked.length));
+      const pickedIds = new Set();
+      for(const {d, n} of dq){
+        const poolD = subjQs.filter(q=>qd(q)===d && !pickedIds.has(q.id));
+        const got = sampleByTopic(poolD, Math.min(n, poolD.length), s.id);
+        got.forEach(q=>pickedIds.add(q.id));
+        picked = picked.concat(got);
+      }
+      if(picked.length < s.mock){   // 특정 난이도 풀 부족 시 잔여로 보충
+        const rest = subjQs.filter(q=>!pickedIds.has(q.id));
+        picked = picked.concat(sampleByTopic(rest, s.mock - picked.length, s.id));
       }
       list = list.concat(picked);
     }
@@ -342,7 +387,7 @@ function answer(pick){
   const last = quiz.idx === quiz.list.length-1;
   $("#feedback").innerHTML = `
     <div class="verdict ${ok?"ok":"bad"}">${ok?"⭕ 정답입니다!":"❌ 오답입니다. 정답은 "+CIRCLED[q.ans-1]}</div>
-    <div class="expl">${esc(q.exp)}</div>
+    <div class="expl"><span class="subj-tag" style="margin-bottom:6px;display:inline-block">난이도 ${DIFF_NAME[qd(q)]}</span><br>${esc(q.exp)}</div>
     <button class="btn" id="nextBtn" style="margin-top:14px">${last?"결과 보기":"다음 문제"}</button>`;
   $("#nextBtn").onclick = nextQ;
   $("#nextBtn").focus();
