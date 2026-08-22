@@ -34,6 +34,7 @@ TOPICS = {
 TOPIC2SUBJ = {t: s for s, ts in TOPICS.items() for t in ts}
 
 # "위 모두"는 앞에 다른 한글이 붙으면 다른 뜻이다 ("부위 모두", "상위 모두") — 오탐지를 막는다
+ENG_PAREN = re.compile(r"\([A-Za-z][A-Za-z0-9 .,'’\-/·%]*\)")   # (Erythrocyte)류 영문 괄호 병기
 BAD_CHOICE = re.compile(r"(모두\s*(옳|맞|틀|아니))|(정답\s*없)|((?<![가-힣])위\s*모두)")
 # 교재별로 값이 갈려 정답 근거로 쓰면 위험한 표현
 # 각 항목: (반드시 모두 매칭돼야 하는 정규식 목록, 경고 문구)
@@ -128,6 +129,18 @@ def check_file(path, existing_norm, existing_q, existing_csets, seen_in_run, see
             ids = existing_csets[ck]
             warns.append(f"{tag} 기존 문항과 보기 5개가 완전히 동일 (id={', '.join(ids[:3])}"
                          f"{' 외' if len(ids) > 3 else ''}) — 사실상 같은 문제면 다른 개념으로 교체")
+
+        # 정답 단서(cue) 검사 — 실제 응시자 피드백: "보기만 봐도 답을 찾을 수 있어.
+        # 답은 길거나 설명이 더 있음. 영어로 추가 표기되어 있잖아" (2026-08 카톡)
+        a = it["ans"] - 1
+        eng = [bool(ENG_PAREN.search(str(x))) for x in it["c"]]
+        if eng[a] and sum(eng) == 1:
+            warns.append(f"{tag} 정답 단서: 정답에만 영문 괄호 병기 — 전부 붙이거나 전부 빼라")
+        lens = [len(str(x)) for x in it["c"]]
+        others = lens[:a] + lens[a+1:]
+        if lens[a] >= max(others) * 1.4 and lens[a] - max(others) >= 12:
+            warns.append(f"{tag} 정답 단서: 정답({lens[a]}자)이 최장 오답({max(others)}자)보다 확연히 긺 — "
+                         "오답에도 같은 밀도의 서술을 붙여라")
 
         blob = str(it["q"]) + " " + " ".join(map(str, it["c"])) + " " + str(it["exp"])
         for pats, why in RISKY:
