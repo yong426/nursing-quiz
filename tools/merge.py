@@ -71,6 +71,9 @@ def main():
     existing_norm = {norm(q["q"]): q["id"] for q in qs}
     used_ids = {q["id"] for q in qs}
     before = len(qs)
+    # 병합 배치 번호: 기존 m<n>-... 중 가장 큰 값 다음 (기존 블록 id와 절대 겹치지 않는 접두어)
+    batch = 1 + max([int(m.group(1)) for m in
+                     (re.match(r"^m(\d+)-", i) for i in used_ids) if m] or [0])
 
     added, skipped = 0, []
     for fi, p in enumerate(paths, 1):
@@ -86,8 +89,8 @@ def main():
             key = norm(it["q"])
             if key in existing_norm:
                 skipped.append(f"{os.path.basename(p)}#{i} 중복(={existing_norm[key]})"); continue
-            qid = f"g{fi}-{i}"
-            while qid in used_ids:
+            qid = f"m{batch}-{fi}-{i}"
+            while qid in used_ids:   # 이론상 발생하지 않지만 안전장치
                 qid += "x"
             used_ids.add(qid); existing_norm[key] = qid
             d = it.get("d")
