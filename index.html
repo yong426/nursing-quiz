@@ -39,6 +39,20 @@ h1{font-size:1.25rem;margin:8px 0 2px}
   border-radius:12px;padding:12px 6px;font-size:.9rem;font-weight:700;cursor:pointer;
   box-shadow:var(--shadow);transition:background .12s,color .12s,border-color .12s}
 .tabs button .badge{margin-left:4px}
+/* 답안지(문제 번호 그리드) */
+.sheet{display:grid;grid-template-columns:repeat(10,1fr);gap:6px}
+@media (max-width:520px){ .sheet{grid-template-columns:repeat(7,1fr)} }
+.sheet button{border:1px solid var(--line);background:var(--card);color:var(--sub);
+  border-radius:8px;padding:8px 0;font-size:.82rem;font-weight:700;cursor:pointer}
+.sheet button.done{background:#dceee8;border-color:#9cccbd;color:var(--acc)}
+.sheet button.cur{outline:2px solid var(--acc);outline-offset:1px}
+.navbar{display:flex;gap:8px;margin-top:12px}
+.navbar button{flex:1;border:1px solid var(--line);background:var(--card);color:var(--ink);
+  border-radius:12px;padding:13px 6px;font-size:.92rem;font-weight:700;cursor:pointer}
+.navbar button:disabled{opacity:.4;cursor:default}
+.navbar button.wide{flex:1.4}
+.qmeta{display:flex;justify-content:space-between;align-items:center;gap:8px;
+  font-size:.8rem;color:var(--sub);margin:-4px 0 8px}
 .tabs button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 .tabs button.on.exam{background:#134e8f;border-color:#134e8f}
 .btn{display:block;width:100%;border:0;border-radius:var(--r);padding:15px;font-size:1.05rem;
@@ -165,7 +179,8 @@ function tickClock(){
   if(left <= 0){
     stopClock(); quiz.timeUp = true;
     toast("⏰ 시험 시간이 종료되었습니다");
-    renderResult(); return;
+    if(quiz.defer) submitExam(); else renderResult();
+    return;
   }
   const el = $("#clock");
   if(el){
@@ -178,7 +193,7 @@ function startClock(){ stopClock(); examTimer = setInterval(tickClock, 1000); ti
 
 function load(k,d){ try{ const v=JSON.parse(localStorage.getItem(k)); return v==null?d:v; }catch(e){ return d; } }
 function save(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
-function savePref(){ save(LS_PREF,{subj:[...sel.subj], topics:[...sel.topics], count:sel.count, autoRemove:pref.autoRemove, topicsOpen:pref.topicsOpen, diff:[...sel.diff], homeTab:pref.homeTab}); }
+function savePref(){ save(LS_PREF,{subj:[...sel.subj], topics:[...sel.topics], count:sel.count, autoRemove:pref.autoRemove, topicsOpen:pref.topicsOpen, diff:[...sel.diff], homeTab:pref.homeTab, defer:pref.defer}); }
 function wrongMap(){ return load(LS_WRONG,{}); }
 function setWrong(m){ save(LS_WRONG,m); }
 function addWrong(q,picked){ const m=wrongMap(); const e=m[q.id]||{c:0}; e.c++; e.t=Date.now(); e.p=picked; m[q.id]=e; setWrong(m); }
@@ -319,6 +334,14 @@ function renderHome(){
     <h2>실전 모의고사 <span style="color:var(--sub);font-weight:500;font-size:.8rem">${SUBJECTS.reduce((a,s)=>a+s.mock,0)}문항 · 105분 · 합격 판정</span></h2>
     <p class="hint" style="margin:0 0 12px">국가시험과 동일하게 기초간호학 35 · 보건간호학 15 · 공중보건학 20 · 실기 35문항이 출제되고,
       총점 60%(63문항) 이상 + 매 과목 40% 이상이면 합격입니다. 105분이 지나면 자동으로 채점됩니다.</p>
+    <h3 style="margin:0 0 6px">채점 방식</h3>
+    <div class="seg" id="gradeSeg" style="width:100%;margin-bottom:6px">
+      <button data-defer="0" class="${pref.defer?"":"on"}" style="flex:1">바로 채점</button>
+      <button data-defer="1" class="${pref.defer?"on":""}" style="flex:1">종료 후 채점</button>
+    </div>
+    <p class="hint" style="margin:0 0 14px">${pref.defer
+      ? "실제 CBT처럼 시험 중에는 정답을 알려주지 않습니다. 문제를 건너뛰거나 이전·다음으로 이동하고, 답안지에서 번호를 눌러 바로 이동할 수 있습니다. 제출하면 한 번에 채점됩니다."
+      : "한 문항을 풀 때마다 즉시 정답과 해설을 보여줍니다. 학습에 유리하지만 실제 시험과는 다릅니다."}</p>
     ${Object.entries(MOCK_MODES).map(([k,m])=>`
       <button class="btn exam" id="mock_${k}" style="margin-bottom:6px">${m.label} 모드 <span style="font-weight:500;opacity:.85">· ${esc(m.sub)}</span></button>
       <p class="hint" style="margin:0 0 14px">${esc(m.desc)}</p>`).join("")}
@@ -377,6 +400,10 @@ function renderHome(){
       startQuiz(sel.count===0 ? list : list.slice(0, sel.count), {});
     };
   }else if(tab === "mock"){
+    $("#gradeSeg").addEventListener("click", ev=>{
+      const b = ev.target.closest("[data-defer]"); if(!b) return;
+      pref.defer = b.dataset.defer === "1"; savePref(); renderHome();
+    });
     Object.keys(MOCK_MODES).forEach(k=>{ $("#mock_"+k).onclick = ()=> startMock(k); });
   }
   window.scrollTo(0,0);
@@ -410,50 +437,85 @@ function startMock(modeKey){
     }
     list = list.concat(picked);
   }
-  startQuiz(shuffle(list), {mock:true, mode:modeKey});
+  startQuiz(shuffle(list), {mock:true, mode:modeKey, defer:!!pref.defer});
 }
 
 /* ---------- quiz ---------- */
 function startQuiz(list, opts){
   if(!list.length){ toast("출제할 문항이 없습니다"); return; }
-  quiz = {list, idx:0, answers:[], fromNote:!!opts.fromNote, mock:!!opts.mock, mode:opts.mode||null};
+  quiz = {list, idx:0, answers:[], fromNote:!!opts.fromNote, mock:!!opts.mock, mode:opts.mode||null,
+          defer:!!opts.defer};
   if(quiz.mock) quiz.deadline = Date.now() + EXAM_MIN*60*1000;
   renderQ();
 }
 
+function answeredCount(){ return quiz.answers.filter(a=>a && a.pick).length; }
+
 function renderQ(){
   const q = quiz.list[quiz.idx];
   const total = quiz.list.length;
+  const cur = quiz.answers[quiz.idx];
+  const def = quiz.defer;
   app.innerHTML = `
   <div class="topbar">
-    <button class="sm" id="quitBtn">종료</button>
+    <button class="sm" id="quitBtn">${def?"제출":"종료"}</button>
     <span class="meta">${quiz.mock?`<span id="clock" style="font-weight:800"></span> · `:""}${quiz.mock&&quiz.mode?esc(MOCK_MODES[quiz.mode].label)+" · ":""}${quiz.fromNote?"오답노트 · ":""}${quiz.idx+1} / ${total}<br>
       <span class="subj-tag">${esc(subjName(q.s))}</span></span>
   </div>
-  <div class="prog"><i style="width:${(quiz.idx)/total*100}%"></i></div>
-  <div class="qcard"><span class="tag">${esc(q.t)}</span><br>${esc(q.q)}</div>
+  <div class="prog"><i style="width:${(def?answeredCount():quiz.idx)/total*100}%"></i></div>
+  ${def?`<div class="qmeta"><span>${esc(subjName(q.s))} · ${esc(q.t)}</span><span>답안 ${answeredCount()} / ${total}</span></div>`:""}
+  <div class="qcard">${def?`<span class="tag">${quiz.idx+1}번</span>`:`<span class="tag">${esc(q.t)}</span>`}<br>${esc(q.q)}</div>
   <div class="choices" id="choiceBtns">
-    ${q.c.map((c,i)=>`<button data-a="${i+1}"><span class="no">${CIRCLED[i]}</span><span>${esc(c)}</span></button>`).join("")}
+    ${q.c.map((c,i)=>`<button data-a="${i+1}"${def&&cur&&cur.pick===i+1?' class="sel-ok"':""}><span class="no">${CIRCLED[i]}</span><span>${esc(c)}</span></button>`).join("")}
   </div>
+  ${def?`
+  <div class="navbar">
+    <button id="prevBtn" ${quiz.idx===0?"disabled":""}>← 이전</button>
+    <button id="sheetBtn" class="wide">답안지 (${answeredCount()}/${total})</button>
+    <button id="nextBtn2" ${quiz.idx===total-1?"disabled":""}>다음 →</button>
+  </div>
+  ${cur?`<p class="hint" style="text-align:center">보기를 다시 누르면 답을 바꿀 수 있습니다</p>`
+       :`<p class="hint" style="text-align:center">답을 고르지 않고 다음 문제로 건너뛸 수 있습니다</p>`}
+  `:""}
   <div id="feedback"></div>`;
 
-  $("#quitBtn").onclick = ()=> quiz.answers.filter(Boolean).length ? renderResult() : renderHome();
+  $("#quitBtn").onclick = ()=>{
+    if(def) return submitExam();
+    return quiz.answers.filter(Boolean).length ? renderResult() : renderHome();
+  };
   $("#choiceBtns").addEventListener("click", ev=>{
     const b = ev.target.closest("[data-a]"); if(!b) return;
     answer(+b.dataset.a);
   });
+  if(def){
+    $("#prevBtn").onclick = ()=>{ if(quiz.idx>0){ quiz.idx--; renderQ(); } };
+    $("#nextBtn2").onclick = ()=>{ if(quiz.idx<total-1){ quiz.idx++; renderQ(); } };
+    $("#sheetBtn").onclick = renderSheet;
+  }
   document.onkeydown = ev=>{
     if(!quiz) return;
-    if(["1","2","3","4","5"].includes(ev.key) && !quiz.answers[quiz.idx]) answer(+ev.key);
-    if(ev.key==="Enter" && quiz.answers[quiz.idx]) nextQ();
+    if(["1","2","3","4","5"].includes(ev.key)){
+      if(def || !quiz.answers[quiz.idx]) answer(+ev.key);
+    }
+    if(def){
+      if(ev.key==="ArrowLeft" && quiz.idx>0){ quiz.idx--; renderQ(); }
+      if(ev.key==="ArrowRight" && quiz.idx<total-1){ quiz.idx++; renderQ(); }
+    }else if(ev.key==="Enter" && quiz.answers[quiz.idx]) nextQ();
   };
   if(quiz.deadline) startClock();
   window.scrollTo(0,0);
 }
 
 function answer(pick){
-  if(quiz.answers[quiz.idx]) return;
   const q = quiz.list[quiz.idx];
+  if(quiz.defer){
+    // 종료 후 채점: 정오 표시 없이 선택만 기록하고 언제든 변경 가능
+    const prev = quiz.answers[quiz.idx];
+    quiz.answers[quiz.idx] = (prev && prev.pick === pick) ? null : {pick};
+    renderQ();
+    return;
+  }
+  if(quiz.answers[quiz.idx]) return;
   const ok = pick === q.ans;
   quiz.answers[quiz.idx] = {pick, ok};
   $("#choiceBtns").querySelectorAll("button").forEach(b=>{
@@ -478,6 +540,56 @@ function answer(pick){
 function nextQ(){
   if(quiz.idx < quiz.list.length-1){ quiz.idx++; renderQ(); }
   else renderResult();
+}
+
+/* ---------- 답안지 (종료 후 채점 모드) ---------- */
+function renderSheet(){
+  const total = quiz.list.length;
+  const bySubj = {};
+  quiz.list.forEach((q,i)=>{ (bySubj[q.s] = bySubj[q.s]||[]).push(i); });
+  app.innerHTML = `
+  <div class="topbar">
+    <button class="sm" id="backBtn">← 문제로</button>
+    <span class="meta"><span id="clock" style="font-weight:800"></span> · 답안 ${answeredCount()} / ${total}</span>
+  </div>
+  ${SUBJECTS.filter(s=>bySubj[s.id]).map(s=>{
+    const idxs = bySubj[s.id];
+    const done = idxs.filter(i=>quiz.answers[i]&&quiz.answers[i].pick).length;
+    return `<div class="card">
+      <h2>${esc(s.name)} <span style="color:var(--sub);font-weight:500;font-size:.8rem">${done} / ${idxs.length} 응답</span></h2>
+      <div class="sheet">
+        ${idxs.map(i=>{
+          const a = quiz.answers[i];
+          return `<button data-jump="${i}" class="${a&&a.pick?"done":""} ${i===quiz.idx?"cur":""}">${i+1}${a&&a.pick?`<br><span style="font-weight:500;font-size:.9em">${CIRCLED[a.pick-1]}</span>`:""}</button>`;
+        }).join("")}
+      </div>
+    </div>`;
+  }).join("")}
+  <button class="btn exam" id="submitBtn">답안 제출하고 채점하기 (${answeredCount()} / ${total} 응답)</button>
+  <p class="hint" style="text-align:center">미응답 문항은 오답으로 처리됩니다.</p>`;
+  $("#backBtn").onclick = renderQ;
+  $("#submitBtn").onclick = submitExam;
+  app.querySelectorAll("[data-jump]").forEach(b=> b.onclick = ()=>{
+    quiz.idx = +b.dataset.jump; renderQ();
+  });
+  document.onkeydown = null;
+  if(quiz.deadline) startClock();
+  window.scrollTo(0,0);
+}
+
+/* 종료 후 채점: 제출 시 일괄 채점 */
+function submitExam(){
+  const left = quiz.list.length - answeredCount();
+  if(!quiz.timeUp && left > 0 &&
+     !confirm(`아직 답하지 않은 문항이 ${left}개 있습니다.\n미응답은 오답으로 처리됩니다. 제출할까요?`)) return;
+  quiz.list.forEach((q,i)=>{
+    const a = quiz.answers[i];
+    if(!a || !a.pick) return;
+    a.ok = a.pick === q.ans;
+    recordStat(q, a.ok);
+    if(!a.ok) addWrong(q, a.pick);
+  });
+  renderResult();
 }
 
 /* ---------- result ---------- */
@@ -521,13 +633,13 @@ function renderResult(){
   }
   if(!quiz.saved && n>0){
     quiz.saved = true;
-    saveSession({t:Date.now(), n:denom, ok:okN, mock:quiz.mock, mode:quiz.mode, note:quiz.fromNote,
+    saveSession({t:Date.now(), n:denom, ok:okN, mock:quiz.mock, mode:quiz.mode, defer:quiz.defer, note:quiz.fromNote,
       subj:[...new Set(quiz.list.slice(0, full?total:quiz.answers.length).map(q=>subjName(q.s)))].slice(0,4),
       bs:Object.fromEntries(Object.entries(subjStat).map(([k,v])=>[k,[v.ok,v.all]])),
       bd:Object.fromEntries(Object.entries(diffStat).map(([k,v])=>[k,[v.ok,v.all]]))});
   }
   app.innerHTML = `
-  <h1>채점 결과${quiz.mock && quiz.mode ? ` <span class="subj-tag" style="font-size:.8rem;vertical-align:3px">실전 ${esc(MOCK_MODES[quiz.mode].label)} 모드</span>` : ""}</h1>
+  <h1>채점 결과${quiz.mock && quiz.mode ? ` <span class="subj-tag" style="font-size:.8rem;vertical-align:3px">실전 ${esc(MOCK_MODES[quiz.mode].label)}${quiz.defer?" · 종료 후 채점":""}</span>` : ""}</h1>
   <div class="card">
     <div class="score">${okN} / ${denom} <small>문항</small></div>
     <div style="text-align:center;color:var(--sub);font-size:.95rem">정답률 ${denom?Math.round(okN/denom*100):0}%</div>
@@ -679,7 +791,7 @@ function renderSessionDetail(idx, backTab){
   const h = load(LS_HIST, [])[idx];
   if(!h){ goTab(backTab||"history"); return; }
   const pct = h.n ? Math.round(h.ok/h.n*100) : 0;
-  const kind = h.mock ? `실전 모의고사${h.mode&&MOCK_MODES[h.mode]?" · "+esc(MOCK_MODES[h.mode].label)+" 모드":""}`
+  const kind = h.mock ? `실전 모의고사${h.mode&&MOCK_MODES[h.mode]?" · "+esc(MOCK_MODES[h.mode].label)+" 모드":""}${h.defer?" · 종료 후 채점":""}`
                       : (h.note ? "오답노트 복습" : "문제 풀이");
   let passHtml = "";
   if(h.mock && h.bs){
