@@ -124,7 +124,7 @@ h1{font-size:1.25rem;margin:8px 0 2px}
 <div class="wrap" id="app"></div>
 <div class="toast" id="toast"></div>
 
-<script src="data.js"></script>
+<script src="data.js?v=1349"></script>
 <script>
 "use strict";
 const $ = sel => document.querySelector(sel);
@@ -134,6 +134,11 @@ const LS_WRONG = "naq_wrong_v1";
 const LS_PREF  = "naq_pref_v1";
 const LS_HIST  = "naq_hist_v1";
 const LS_STAT  = "naq_stat_v1";
+const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
+/* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
+const APP_VERSION = "2026.08.22.6";
+/* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
+const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
 const DATA = (window.QUIZ_DATA || {subjects:[], topics:{}, questions:[]});
 const SUBJECTS = DATA.subjects;                    // [{id, name, mock}] mock = 실전 문항수
@@ -282,6 +287,7 @@ function renderHome(){
   <p class="sub">국가시험 대비 자체 제작 ${DATA.questions.length}문항 · 5지선다 · 해설 포함</p>
 
   ${tabsHtml(tab)}
+  ${resumeCardHtml(tab)}
 
   ${tab!=="practice" ? "" : `
   <div class="card">
@@ -361,7 +367,7 @@ function renderHome(){
   <p class="footer">본 문제은행은 간호조무사 국가시험 형식에 맞춰 자체 제작한 학습용 모의문제입니다.<br>
   실제 기출문제가 아니며, 해설은 참고용으로 오류가 있을 수 있습니다.</p>`;
 
-  bindTabs();
+  bindTabs(); bindResume();
   app.querySelectorAll("[data-sess]").forEach(el=> el.onclick = ()=> renderSessionDetail(+el.dataset.sess, "mock"));
   if(tab === "practice"){
     $("#subjChips").addEventListener("click", ev=>{
@@ -435,14 +441,18 @@ function startMock(modeKey){
       const rest = subjQs.filter(q=>!pickedIds.has(q.id));
       picked = picked.concat(sampleByTopic(rest, s.mock - picked.length, s.id));
     }
-    list = list.concat(picked);
+    // 실제 시험처럼 과목 순서(기초→보건→공중→실기)를 유지하고, 과목 안에서만 섞는다
+    list = list.concat(shuffle(picked));
   }
-  startQuiz(shuffle(list), {mock:true, mode:modeKey, defer:!!pref.defer});
+  startQuiz(list, {mock:true, mode:modeKey, defer:!!pref.defer});
 }
 
 /* ---------- quiz ---------- */
 function startQuiz(list, opts){
   if(!list.length){ toast("출제할 문항이 없습니다"); return; }
+  if(localStorage.getItem(LS_RESUME) &&
+     !confirm("저장해 둔 진행 상황이 있습니다.\n새로 시작하면 저장된 진행 상황은 삭제됩니다. 계속할까요?")) return;
+  localStorage.removeItem(LS_RESUME);
   quiz = {list, idx:0, answers:[], fromNote:!!opts.fromNote, mock:!!opts.mock, mode:opts.mode||null,
           defer:!!opts.defer};
   if(quiz.mock) quiz.deadline = Date.now() + EXAM_MIN*60*1000;
@@ -451,6 +461,80 @@ function startQuiz(list, opts){
 
 function answeredCount(){ return quiz.answers.filter(a=>a && a.pick).length; }
 
+/* ---------- 중간 저장 / 이어서 풀기 ---------- */
+function pauseQuiz(){
+  if(!quiz) return;
+  save(LS_RESUME, {
+    t: Date.now(),
+    ids: quiz.list.map(q=>q.id),
+    answers: quiz.answers.map(a=> a ? {pick:a.pick, ok:a.ok} : null),
+    idx: quiz.idx, mock: quiz.mock, mode: quiz.mode, defer: quiz.defer, fromNote: quiz.fromNote,
+    remain: quiz.deadline ? Math.max(0, quiz.deadline - Date.now()) : null
+  });
+  stopClock(); document.onkeydown = null;
+  const back = quiz.mock ? "mock" : (quiz.fromNote ? "note" : "practice");
+  quiz = null;
+  toast("진행 상황을 저장했습니다");
+  goTab(back);
+}
+function resumeQuiz(){
+  const st = load(LS_RESUME, null);
+  if(!st) return;
+  const list = st.ids.map(id=>QBYID[id]);
+  if(list.some(q=>!q)){
+    localStorage.removeItem(LS_RESUME);
+    toast("문항이 바뀌어 이어서 풀 수 없습니다");
+    goTab(homeTab); return;
+  }
+  quiz = {list, idx: Math.min(st.idx, list.length-1), answers: st.answers.map(a=>a||null),
+          mock: !!st.mock, mode: st.mode||null, defer: !!st.defer, fromNote: !!st.fromNote};
+  // 바로 채점 모드에서 이미 채점된 문항에 머물러 있으면 다음 문항부터
+  if(!quiz.defer && quiz.answers[quiz.idx]) quiz.idx = Math.min(quiz.idx+1, list.length-1);
+  if(st.remain != null) quiz.deadline = Date.now() + st.remain;
+  localStorage.removeItem(LS_RESUME);
+  renderQ();
+}
+function resumeCardHtml(forTab){
+  const st = load(LS_RESUME, null);
+  if(!st) return "";
+  const belongs = st.mock ? "mock" : (st.fromNote ? "note" : "practice");
+  if(belongs !== forTab) return "";
+  const answered = st.answers.filter(a=>a && a.pick).length;
+  const kind = st.mock
+    ? `실전 모의고사${st.mode&&MOCK_MODES[st.mode]?" · "+MOCK_MODES[st.mode].label:""} · ${st.defer?"종료 후 채점":"바로 채점"}`
+    : (st.fromNote ? "오답노트 복습" : "문제 풀이");
+  const d = new Date(st.t);
+  return `<div class="card" style="border-left:4px solid var(--acc)">
+    <h2>이어서 풀기</h2>
+    <div style="font-weight:650;font-size:.92rem">${esc(kind)} · ${st.ids.length}문항</div>
+    <div style="color:var(--sub);font-size:.8rem;margin-top:3px">${answered} / ${st.ids.length} 응답${
+      st.remain!=null?` · 남은 시간 ${Math.floor(st.remain/60000)}분 ${String(Math.floor(st.remain%60000/1000)).padStart(2,"0")}초`:""
+    }<br>${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")} 저장</div>
+    <div class="rowbtns" style="margin-top:12px">
+      <button class="btn" id="resumeBtn">이어서 풀기</button>
+      <button class="btn ghost" id="discardBtn" style="color:var(--bad)">삭제</button>
+    </div>
+  </div>`;
+}
+function bindResume(){
+  const r = $("#resumeBtn"); if(r) r.onclick = resumeQuiz;
+  const d = $("#discardBtn");
+  if(d) d.onclick = ()=>{
+    if(confirm("저장해 둔 진행 상황을 삭제할까요?")){
+      localStorage.removeItem(LS_RESUME); toast("삭제했습니다"); goTab(homeTab);
+    }
+  };
+}
+
+/* 종료 후 채점 모드의 문항 이동 바 (문제 위·아래 동일하게 배치) */
+function navbarHtml(total){
+  return `<div class="navbar">
+    <button data-nav="prev" ${quiz.idx===0?"disabled":""}>← 이전</button>
+    <button data-nav="sheet" class="wide">답안지 (${answeredCount()}/${total})</button>
+    <button data-nav="next" ${quiz.idx===total-1?"disabled":""}>다음 →</button>
+  </div>`;
+}
+
 function renderQ(){
   const q = quiz.list[quiz.idx];
   const total = quiz.list.length;
@@ -458,27 +542,28 @@ function renderQ(){
   const def = quiz.defer;
   app.innerHTML = `
   <div class="topbar">
-    <button class="sm" id="quitBtn">${def?"제출":"종료"}</button>
+    <span style="display:flex;gap:6px">
+      <button class="sm" id="pauseBtn">정지</button>
+      <button class="sm" id="quitBtn">${def?"제출":"종료"}</button>
+    </span>
     <span class="meta">${quiz.mock?`<span id="clock" style="font-weight:800"></span> · `:""}${quiz.mock&&quiz.mode?esc(MOCK_MODES[quiz.mode].label)+" · ":""}${quiz.fromNote?"오답노트 · ":""}${quiz.idx+1} / ${total}<br>
       <span class="subj-tag">${esc(subjName(q.s))}</span></span>
   </div>
   <div class="prog"><i style="width:${(def?answeredCount():quiz.idx)/total*100}%"></i></div>
   ${def?`<div class="qmeta"><span>${esc(subjName(q.s))} · ${esc(q.t)}</span><span>답안 ${answeredCount()} / ${total}</span></div>`:""}
-  <div class="qcard">${def?`<span class="tag">${quiz.idx+1}번</span>`:`<span class="tag">${esc(q.t)}</span>`}<br>${esc(q.q)}</div>
+  ${def?navbarHtml(total):""}
+  <div class="qcard" ${def?'style="margin-top:12px"':""}>${def?`<span class="tag">${quiz.idx+1}번</span>`:`<span class="tag">${esc(q.t)}</span>`}<br>${esc(q.q)}</div>
   <div class="choices" id="choiceBtns">
     ${q.c.map((c,i)=>`<button data-a="${i+1}"${def&&cur&&cur.pick===i+1?' class="sel-ok"':""}><span class="no">${CIRCLED[i]}</span><span>${esc(c)}</span></button>`).join("")}
   </div>
   ${def?`
-  <div class="navbar">
-    <button id="prevBtn" ${quiz.idx===0?"disabled":""}>← 이전</button>
-    <button id="sheetBtn" class="wide">답안지 (${answeredCount()}/${total})</button>
-    <button id="nextBtn2" ${quiz.idx===total-1?"disabled":""}>다음 →</button>
-  </div>
+  ${navbarHtml(total)}
   ${cur?`<p class="hint" style="text-align:center">보기를 다시 누르면 답을 바꿀 수 있습니다</p>`
        :`<p class="hint" style="text-align:center">답을 고르지 않고 다음 문제로 건너뛸 수 있습니다</p>`}
   `:""}
   <div id="feedback"></div>`;
 
+  $("#pauseBtn").onclick = pauseQuiz;
   $("#quitBtn").onclick = ()=>{
     if(def) return submitExam();
     return quiz.answers.filter(Boolean).length ? renderResult() : renderHome();
@@ -488,9 +573,12 @@ function renderQ(){
     answer(+b.dataset.a);
   });
   if(def){
-    $("#prevBtn").onclick = ()=>{ if(quiz.idx>0){ quiz.idx--; renderQ(); } };
-    $("#nextBtn2").onclick = ()=>{ if(quiz.idx<total-1){ quiz.idx++; renderQ(); } };
-    $("#sheetBtn").onclick = renderSheet;
+    app.querySelectorAll("[data-nav]").forEach(b=> b.onclick = ()=>{
+      const k = b.dataset.nav;
+      if(k==="sheet") return renderSheet();
+      if(k==="prev" && quiz.idx>0){ quiz.idx--; renderQ(); }
+      if(k==="next" && quiz.idx<total-1){ quiz.idx++; renderQ(); }
+    });
   }
   document.onkeydown = ev=>{
     if(!quiz) return;
@@ -511,8 +599,14 @@ function answer(pick){
   if(quiz.defer){
     // 종료 후 채점: 정오 표시 없이 선택만 기록하고 언제든 변경 가능
     const prev = quiz.answers[quiz.idx];
+    const fresh = !(prev && prev.pick);                    // 처음 답하는 문항인가
     quiz.answers[quiz.idx] = (prev && prev.pick === pick) ? null : {pick};
     renderQ();
+    // 처음 답한 경우에만 자동으로 다음 문항으로 (답 변경·해제 시에는 머무름)
+    if(fresh && quiz.answers[quiz.idx] && quiz.idx < quiz.list.length-1){
+      const at = quiz.idx;
+      setTimeout(()=>{ if(quiz && quiz.defer && quiz.idx===at){ quiz.idx++; renderQ(); } }, 220);
+    }
     return;
   }
   if(quiz.answers[quiz.idx]) return;
@@ -549,7 +643,10 @@ function renderSheet(){
   quiz.list.forEach((q,i)=>{ (bySubj[q.s] = bySubj[q.s]||[]).push(i); });
   app.innerHTML = `
   <div class="topbar">
-    <button class="sm" id="backBtn">← 문제로</button>
+    <span style="display:flex;gap:6px">
+      <button class="sm" id="backBtn">← 문제로</button>
+      <button class="sm" id="pauseBtn">정지</button>
+    </span>
     <span class="meta"><span id="clock" style="font-weight:800"></span> · 답안 ${answeredCount()} / ${total}</span>
   </div>
   ${SUBJECTS.filter(s=>bySubj[s.id]).map(s=>{
@@ -568,6 +665,7 @@ function renderSheet(){
   <button class="btn exam" id="submitBtn">답안 제출하고 채점하기 (${answeredCount()} / ${total} 응답)</button>
   <p class="hint" style="text-align:center">미응답 문항은 오답으로 처리됩니다.</p>`;
   $("#backBtn").onclick = renderQ;
+  $("#pauseBtn").onclick = pauseQuiz;
   $("#submitBtn").onclick = submitExam;
   app.querySelectorAll("[data-jump]").forEach(b=> b.onclick = ()=>{
     quiz.idx = +b.dataset.jump; renderQ();
@@ -596,6 +694,7 @@ function submitExam(){
 function renderResult(){
   document.onkeydown = null;
   stopClock();
+  localStorage.removeItem(LS_RESUME);   // 완료했으므로 중간 저장 해제
   const done = quiz.answers.filter(Boolean);
   const n = done.length;
   const okN = done.filter(a=>a.ok).length;
@@ -717,6 +816,7 @@ function renderNote(){
   ].filter(Boolean).join(" · ");
   app.innerHTML = `
   ${tabsHtml("note")}
+  ${resumeCardHtml("note")}
   <p class="sub" style="margin:-6px 0 12px">오답노트 ${items.length}문항</p>
   ${items.length?`
   <div class="card" style="padding:12px 14px;margin-bottom:10px">
@@ -754,7 +854,7 @@ function renderNote(){
   <button class="btn ghost" id="clearNote" style="color:var(--bad)">오답노트 전체 초기화</button>
   `:`<div class="empty">저장된 오답이 없습니다.<br>문제를 풀다 틀리면 자동으로 저장됩니다.</div>`}
   `;
-  bindTabs();
+  bindTabs(); bindResume();
   if(items.length){
     $("#noteChips").addEventListener("click", ev=>{
       const b = ev.target.closest("[data-ns]"); if(!b) return;
@@ -908,11 +1008,27 @@ function renderHistory(){
   window.scrollTo(0,0);
 }
 
+/* ---------- 버전 확인 → 구버전이면 캐시 정리 후 최신 UI로 자동 갱신 ---------- */
+function checkVersion(){
+  fetch("version.json?t=" + Date.now(), {cache:"no-store"})
+    .then(r=> r.ok ? r.json() : null)
+    .then(j=>{
+      if(!j || !j.app || j.app === APP_VERSION) return;
+      // 같은 버전으로 이미 한 번 새로고침했다면 반복하지 않음 (무한 루프 방지)
+      if(sessionStorage.getItem("naq_reload_for") === j.app) return;
+      sessionStorage.setItem("naq_reload_for", j.app);
+      VOLATILE_KEYS.forEach(k=> localStorage.removeItem(k));   // 오답노트·학습기록·누적통계는 보존
+      location.replace(location.pathname + "?v=" + encodeURIComponent(j.app));
+    })
+    .catch(()=>{});   // 오프라인 등은 무시
+}
+
 /* ---------- boot ---------- */
 if(!DATA.questions.length){
   app.innerHTML = `<div class="empty">문항 데이터(data.js)를 불러오지 못했습니다.</div>`;
 }else{
   goTab(homeTab);
+  checkVersion();
 }
 </script>
 </body>
