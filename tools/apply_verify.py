@@ -23,6 +23,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 INCOMING = os.path.join(ROOT, "tools", "incoming")
 FIELDS = ("t", "q", "c", "ans", "exp")
+# 패치할 때 함께 보존해야 하는 부가 필드. d(난이도)를 흘리면 병합 단계에서
+# 조용히 '중간'으로 떨어져 난이도 배합이 망가진다 (merge.py가 파일명으로 보정하지만 의존하지 않는다).
+EXTRA = ("d",)
 
 
 def load(p):
@@ -115,7 +118,11 @@ def main():
                     errors.append(f"{fn} #{i}: 대체 문항 주제가 다름 "
                                   f"({items[i].get('t')} → {rep.get('t')})")
                     continue
-                items[i] = {k: rep[k] for k in FIELDS}
+                merged = {k: rep[k] for k in FIELDS}
+                for k in EXTRA:
+                    if k in rep: merged[k] = rep[k]
+                    elif k in items[i]: merged[k] = items[i][k]
+                items[i] = merged
                 applied["교체"] += 1
                 changes.append(f"교체  {fn} #{i}  [{x['_src']}] {x.get('reason','')[:70]}")
                 dirty = True
@@ -125,7 +132,7 @@ def main():
                 held.append(f"보류  {fn} #{i}  ({x.get('verdict')}) [{x['_src']}] "
                             f"{x.get('reason','')[:70]}")
                 continue
-            unknown = [k for k in patch if k not in FIELDS]
+            unknown = [k for k in patch if k not in FIELDS + EXTRA]
             if unknown:
                 errors.append(f"{fn} #{i}: 패치에 알 수 없는 필드 {unknown}")
                 continue
@@ -135,7 +142,7 @@ def main():
             if bad:
                 errors.append(f"{fn} #{i}: 패치 적용 후 스키마 위반 — {bad}")
                 continue
-            items[i] = {k: cand[k] for k in FIELDS}
+            items[i] = {k: cand[k] for k in FIELDS + EXTRA if k in cand}
             applied["패치"] += 1
             changes.append(f"패치  {fn} #{i}  {sorted(patch.keys())}  [{x['_src']}] "
                            f"{x.get('reason','')[:60]}")
