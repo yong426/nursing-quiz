@@ -125,6 +125,27 @@ let sel = {
   count: pref.count || 20
 };
 let quiz = null;
+let examTimer = null;
+let noteSubj = "all";
+const EXAM_MIN = 105;   // 2025 CBT: 105문항 105분
+
+function stopClock(){ if(examTimer){ clearInterval(examTimer); examTimer = null; } }
+function tickClock(){
+  if(!quiz || !quiz.deadline){ stopClock(); return; }
+  const left = quiz.deadline - Date.now();
+  if(left <= 0){
+    stopClock(); quiz.timeUp = true;
+    toast("⏰ 시험 시간이 종료되었습니다");
+    renderResult(); return;
+  }
+  const el = $("#clock");
+  if(el){
+    const m = Math.floor(left/60000), s = Math.floor(left%60000/1000);
+    el.textContent = `⏱ ${m}:${String(s).padStart(2,"0")}`;
+    el.style.color = left < 5*60000 ? "var(--bad)" : "var(--ink)";
+  }
+}
+function startClock(){ stopClock(); examTimer = setInterval(tickClock, 1000); tickClock(); }
 
 function load(k,d){ try{ const v=JSON.parse(localStorage.getItem(k)); return v==null?d:v; }catch(e){ return d; } }
 function save(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
@@ -148,7 +169,7 @@ function pool(){
 /* ---------- home ---------- */
 let topicsOpen = pref.topicsOpen !== false;
 function renderHome(){
-  quiz = null; document.onkeydown = null;
+  quiz = null; document.onkeydown = null; stopClock();
   const wrongN = Object.keys(wrongMap()).length;
   const p = pool();
   const subjCounts = {};
@@ -197,7 +218,7 @@ function renderHome(){
   <button class="btn" id="startBtn" ${p.length===0?"disabled":""}>
     문제 풀기 시작 (${sel.count===0?p.length:Math.min(sel.count,p.length)}문항 / 선택범위 ${p.length}문항)
   </button>
-  <button class="btn exam" id="mockBtn">실전 모의고사 (100문항 · 합격 판정)</button>
+  <button class="btn exam" id="mockBtn">실전 모의고사 (${SUBJECTS.reduce((a,s)=>a+s.mock,0)}문항 · 합격 판정)</button>
   <div class="rowbtns" style="margin-top:10px">
     <button class="btn ghost" id="noteBtn">오답노트${wrongN?`<span class="badge">${wrongN}</span>`:""}</button>
     <button class="btn ghost" id="histBtn">학습 기록</button>
@@ -269,6 +290,7 @@ function renderHome(){
 function startQuiz(list, opts){
   if(!list.length){ toast("출제할 문항이 없습니다"); return; }
   quiz = {list, idx:0, answers:[], fromNote:!!opts.fromNote, mock:!!opts.mock};
+  if(quiz.mock) quiz.deadline = Date.now() + EXAM_MIN*60*1000;
   renderQ();
 }
 
@@ -278,7 +300,7 @@ function renderQ(){
   app.innerHTML = `
   <div class="topbar">
     <button class="sm" id="quitBtn">종료</button>
-    <span class="meta">${quiz.mock?"실전 모의고사 · ":""}${quiz.fromNote?"오답노트 · ":""}${quiz.idx+1} / ${total}<br>
+    <span class="meta">${quiz.mock?`<span id="clock" style="font-weight:800"></span> · `:""}${quiz.fromNote?"오답노트 · ":""}${quiz.idx+1} / ${total}<br>
       <span class="subj-tag">${esc(subjName(q.s))}</span></span>
   </div>
   <div class="prog"><i style="width:${(quiz.idx)/total*100}%"></i></div>
@@ -298,6 +320,7 @@ function renderQ(){
     if(["1","2","3","4","5"].includes(ev.key) && !quiz.answers[quiz.idx]) answer(+ev.key);
     if(ev.key==="Enter" && quiz.answers[quiz.idx]) nextQ();
   };
+  if(quiz.deadline) startClock();
   window.scrollTo(0,0);
 }
 
@@ -333,39 +356,48 @@ function nextQ(){
 /* ---------- result ---------- */
 function renderResult(){
   document.onkeydown = null;
+  stopClock();
   const done = quiz.answers.filter(Boolean);
   const n = done.length;
   const okN = done.filter(a=>a.ok).length;
+  const total = quiz.list.length;
+  const unanswered = total - n;
+  const full = quiz.mock;   // 모의고사는 미응답을 오답으로 집계
   const subjStat = {};
   const wrongs = [];
   quiz.list.forEach((q,i)=>{
-    const a = quiz.answers[i]; if(!a) return;
+    const a = quiz.answers[i];
+    if(!a && !full) return;
     const s = subjStat[q.s] || (subjStat[q.s]={ok:0,all:0});
-    s.all++; if(a.ok) s.ok++;
-    if(!a.ok) wrongs.push({q, pick:a.pick});
+    s.all++;
+    if(a && a.ok) s.ok++;
+    if(a && !a.ok) wrongs.push({q, pick:a.pick});
   });
-  // 실전 판정: 전과목 완주 시 — 총점 60% 이상 & 매 과목 40% 이상
+  const denom = full ? total : n;
+  // 실전 판정: 총점 60% 이상 & 매 과목 40% 이상 (미응답=오답)
   let passHtml = "";
-  if(quiz.mock && n === quiz.list.length){
-    const failSubj = SUBJECTS.filter(s=>{
-      const st = subjStat[s.id]; return st && st.ok < Math.ceil(st.all*0.4);
-    });
-    const totalPass = okN >= Math.ceil(n*0.6);
+  const failSubj = quiz.mock ? SUBJECTS.filter(s=>{
+    const st = subjStat[s.id]; return st && st.ok < Math.ceil(st.all*0.4);
+  }) : [];
+  if(quiz.mock){
+    const cut = Math.ceil(total*0.6);
+    const totalPass = okN >= cut;
     const pass = totalPass && failSubj.length===0;
     passHtml = `<div class="passband ${pass?"pass":"fail"}">
-      ${pass?"🎉 합격 기준 통과!":"불합격 기준"} (총점 ${okN}점${totalPass?" ≥":" <"} ${Math.ceil(n*0.6)}점${failSubj.length?` · 과락: ${failSubj.map(s=>esc(s.name)).join(", ")}`:""})
-    </div>`;
+      ${pass?"🎉 합격 기준 통과!":"불합격 기준"} (총점 ${okN}점${totalPass?" ≥":" <"} 합격선 ${cut}점${failSubj.length?` · 과락: ${failSubj.map(s=>esc(s.name)).join(", ")}`:""})
+    </div>
+    ${unanswered?`<div style="text-align:center;color:var(--sub);font-size:.82rem;margin-top:8px">${quiz.timeUp?"⏰ 시간 종료 — ":""}미응답 ${unanswered}문항은 오답으로 처리되었습니다</div>`:""}`;
   }
   if(!quiz.saved && n>0){
     quiz.saved = true;
-    saveSession({t:Date.now(), n, ok:okN, mock:quiz.mock, note:quiz.fromNote,
-      subj:[...new Set(quiz.list.slice(0,quiz.answers.length).map(q=>subjName(q.s)))].slice(0,4)});
+    saveSession({t:Date.now(), n:denom, ok:okN, mock:quiz.mock, note:quiz.fromNote,
+      subj:[...new Set(quiz.list.slice(0, full?total:quiz.answers.length).map(q=>subjName(q.s)))].slice(0,4)});
   }
   app.innerHTML = `
   <h1>채점 결과</h1>
   <div class="card">
-    <div class="score">${okN} / ${n} <small>문항</small></div>
-    <div style="text-align:center;color:var(--sub);font-size:.95rem">정답률 ${n?Math.round(okN/n*100):0}%</div>
+    <div class="score">${okN} / ${denom} <small>문항</small></div>
+    <div style="text-align:center;color:var(--sub);font-size:.95rem">정답률 ${denom?Math.round(okN/denom*100):0}%</div>
     ${passHtml}
   </div>
   <div class="card">
@@ -373,9 +405,11 @@ function renderResult(){
     <table class="tbl"><tr><th>과목</th><th style="text-align:right">정답 / 문항</th></tr>
     ${SUBJECTS.filter(s=>subjStat[s.id]).map(s=>{
       const st=subjStat[s.id];
-      return `<tr><td>${esc(s.name)}</td><td class="num">${st.ok} / ${st.all} (${Math.round(st.ok/st.all*100)}%)</td></tr>`;
+      const gwarak = quiz.mock && st.ok < Math.ceil(st.all*0.4);
+      return `<tr><td>${esc(s.name)}${gwarak?' <span style="color:var(--bad);font-weight:800;font-size:.78rem">과락</span>':""}</td><td class="num">${st.ok} / ${st.all} (${Math.round(st.ok/st.all*100)}%)</td></tr>`;
     }).join("")}
     </table>
+    ${quiz.mock?`<p class="hint">합격 기준: 총점 60% 이상 + 매 과목 40% 이상 (과목 40% 미만 = 과락)</p>`:""}
   </div>
   ${wrongs.length?`
   <div class="card">
@@ -416,22 +450,30 @@ function viewOne(id, backFn){
 
 /* ---------- wrong note ---------- */
 function renderNote(){
-  document.onkeydown = null;
+  document.onkeydown = null; stopClock();
   const m = wrongMap();
   const items = Object.entries(m).map(([id,e])=>({q:QBYID[id],e})).filter(x=>x.q)
     .sort((a,b)=> b.e.t - a.e.t);
+  const counts = {};
+  items.forEach(x=>{ counts[x.q.s]=(counts[x.q.s]||0)+1; });
+  if(noteSubj!=="all" && !counts[noteSubj]) noteSubj = "all";
+  const shown = noteSubj==="all" ? items : items.filter(x=>x.q.s===noteSubj);
   app.innerHTML = `
   <div class="topbar"><button class="sm" id="backBtn">← 홈</button>
     <span class="meta">오답노트 ${items.length}문항</span></div>
   ${items.length?`
-  <button class="btn" id="retryAll">오답 전체 다시 풀기 (${items.length})</button>
+  <div class="chips" style="margin-bottom:10px" id="noteChips">
+    <button class="chip ${noteSubj==="all"?"on":""}" data-ns="all">전체<small>${items.length}</small></button>
+    ${SUBJECTS.filter(s=>counts[s.id]).map(s=>`<button class="chip ${noteSubj===s.id?"on":""}" data-ns="${s.id}">${esc(s.name)}<small>${counts[s.id]}</small></button>`).join("")}
+  </div>
+  <button class="btn" id="retryAll" ${shown.length?"":"disabled"}>${noteSubj==="all"?"오답 전체 다시 풀기":esc(subjName(noteSubj))+" 오답 다시 풀기"} (${shown.length})</button>
   <div style="margin:10px 0 4px">
     <label style="font-size:.82rem;color:var(--sub)">
       <input type="checkbox" id="autoRm" ${pref.autoRemove?"checked":""}> 다시 풀어 맞히면 자동 제거
     </label>
   </div>
   <div class="card" style="padding:6px 14px">
-    ${items.map(({q,e})=>`
+    ${shown.length ? shown.map(({q,e})=>`
       <div class="witem">
         <div class="info">
           <div class="t1">${esc(q.q)}</div>
@@ -442,14 +484,18 @@ function renderNote(){
           <button class="sm" data-view="${q.id}">해설</button>
           <button class="sm danger" data-del="${q.id}">삭제</button>
         </div>
-      </div>`).join("")}
+      </div>`).join("") : `<div class="empty" style="padding:16px 0">이 과목의 오답이 없습니다.</div>`}
   </div>
   <button class="btn ghost" id="clearNote" style="color:var(--bad)">오답노트 전체 초기화</button>
   `:`<div class="empty">저장된 오답이 없습니다.<br>문제를 풀다 틀리면 자동으로 저장됩니다.</div>`}
   `;
   $("#backBtn").onclick = renderHome;
   if(items.length){
-    $("#retryAll").onclick = ()=> startQuiz(shuffle(items.map(x=>x.q)), {fromNote:true});
+    $("#noteChips").addEventListener("click", ev=>{
+      const b = ev.target.closest("[data-ns]"); if(!b) return;
+      noteSubj = b.dataset.ns; renderNote();
+    });
+    $("#retryAll").onclick = ()=>{ if(shown.length) startQuiz(shuffle(shown.map(x=>x.q)), {fromNote:true}); };
     $("#autoRm").onchange = ev=>{ pref.autoRemove = ev.target.checked; savePref(); };
     app.querySelectorAll("[data-solve]").forEach(b=> b.onclick = ()=> startQuiz([QBYID[b.dataset.solve]], {fromNote:true}));
     app.querySelectorAll("[data-view]").forEach(b=> b.onclick = ()=> viewOne(b.dataset.view, renderNote));
@@ -467,7 +513,7 @@ function renderNote(){
 
 /* ---------- history ---------- */
 function renderHistory(){
-  document.onkeydown = null;
+  document.onkeydown = null; stopClock();
   const hist = load(LS_HIST, []);
   const stat = load(LS_STAT, {});
   const subjAcc = {};
