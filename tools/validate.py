@@ -33,7 +33,8 @@ TOPICS = {
 }
 TOPIC2SUBJ = {t: s for s, ts in TOPICS.items() for t in ts}
 
-BAD_CHOICE = re.compile(r"(모두\s*(옳|맞|틀|아니))|(정답\s*없)|(위\s*모두)")
+# "위 모두"는 앞에 다른 한글이 붙으면 다른 뜻이다 ("부위 모두", "상위 모두") — 오탐지를 막는다
+BAD_CHOICE = re.compile(r"(모두\s*(옳|맞|틀|아니))|(정답\s*없)|((?<![가-힣])위\s*모두)")
 # 교재별로 값이 갈려 정답 근거로 쓰면 위험한 표현
 # 각 항목: (반드시 모두 매칭돼야 하는 정규식 목록, 경고 문구)
 RISKY = [

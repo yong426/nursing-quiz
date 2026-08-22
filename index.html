@@ -137,7 +137,7 @@ h1{font-size:1.25rem;margin:8px 0 2px}
 <div class="wrap" id="app"></div>
 <div class="toast" id="toast"></div>
 
-<script src="data.js?v=2396"></script>
+<script src="data.js?v=2438"></script>
 <script>
 "use strict";
 const $ = sel => document.querySelector(sel);
@@ -151,7 +151,7 @@ const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
 const LS_RECENT = "naq_recent_v1";   // 최근 출제 이력(회차 순번) — 같은 문항이 연달아 나오지 않게
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.22.14";
+const APP_VERSION = "2026.08.22.15";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
@@ -427,6 +427,15 @@ function headerHtml(){
   <p class="sub">국가시험 대비 자체 제작 ${DATA.questions.length}문항 · 5지선다 · 해설 포함</p>`;
 }
 
+/* 저작권·면책 표기 — 네 탭 모두 같은 꼬리말을 쓴다 */
+function footerHtml(){
+  return `<p class="footer">
+    <b>© 2026 fadongkwon soft</b> · 본 문제은행의 모든 문항·해설·화면 구성은 fadongkwon soft가 창작한 저작물입니다.<br>
+    무단 복제·전재·재배포 및 상업적 이용을 금합니다.<br><br>
+    간호조무사 국가시험 형식에 맞춰 자체 제작한 학습용 모의문제이며 실제 기출문제가 아닙니다.
+    해설에 오류가 있을 수 있으므로 참고용으로만 활용하세요.</p>`;
+}
+
 function tabsHtml(active){
   const reviewN = Object.keys(wrongMap()).length + Object.keys(starMap()).length;
   return `<div class="tabs" id="homeTabs">${TABS.map(t=>
@@ -556,8 +565,7 @@ function renderHome(){
       <p class="hint">세션을 누르면 과목별 점수를 볼 수 있습니다.</p></div>` : ""; })()}
   `}
 
-  <p class="footer">본 문제은행은 간호조무사 국가시험 형식에 맞춰 자체 제작한 학습용 모의문제입니다.<br>
-  실제 기출문제가 아니며, 해설은 참고용으로 오류가 있을 수 있습니다.</p>`;
+  ${footerHtml()}`;
 
   bindTabs(); bindResume();
   app.querySelectorAll("[data-sess]").forEach(el=> el.onclick = ()=> renderSessionDetail(+el.dataset.sess, "mock"));
@@ -1125,7 +1133,8 @@ function renderNote(){
       </div>`).join("") : `<div class="empty" style="padding:16px 0">선택한 조건에 해당하는 ${KIND} 문항이 없습니다.</div>`}
   </div>
   <button class="btn ghost" id="clearNote" style="color:var(--bad)">${KIND} 목록 전체 초기화</button>
-  `:`<div class="empty">${isStar?"별표한 문항이 없습니다.<br>문제를 풀 때 상단 ☆ 버튼을 누르면 여기에 모입니다.":"저장된 오답이 없습니다.<br>문제를 풀다 틀리면 자동으로 저장됩니다."}</div>`}
+  `:`<div class="empty">${isStar?"별표한 문항이 없습니다.<br>문제를 풀 때 문제 위 ☆ 버튼을 누르면 여기에 모입니다.":"저장된 오답이 없습니다.<br>문제를 풀다 틀리면 자동으로 저장됩니다."}</div>`}
+  ${footerHtml()}
   `;
   bindTabs(); bindResume();
   $("#viewSeg").addEventListener("click", ev=>{
@@ -1292,6 +1301,7 @@ function renderHistory(){
       ${seen?`<button class="btn ghost" id="clearRecent" style="margin-top:10px">풀어본 범위 초기화</button>`:""}
     </div>`; })()}
   ${(hist.length||tot)?`<button class="btn ghost" id="clearHist" style="color:var(--bad)">기록 전체 초기화</button>`:""}
+  ${footerHtml()}
   `;
   bindTabs();
   app.querySelectorAll("[data-sess]").forEach(el=> el.onclick = ()=> renderSessionDetail(+el.dataset.sess, "history"));
