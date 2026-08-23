@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
@@ -164,7 +164,7 @@ const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
 const LS_RECENT = "naq_recent_v1";   // 최근 출제 이력(회차 순번) — 같은 문항이 연달아 나오지 않게
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.23.4";
+const APP_VERSION = "2026.08.23.5";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
@@ -436,9 +436,22 @@ let homeTab = TABS.some(t=>t.k===pref.homeTab) ? pref.homeTab : "practice";
 
 /* 모든 홈 탭이 같은 머리글을 쓴다 — 탭 줄의 세로 위치가 탭마다 달라지지 않게 하려면 필수 */
 function headerHtml(){
-  return `<h1>간호조무사 모의 문제은행</h1>
+  // 앱 공유 버튼은 모드 선택 화면(4개 탭) 상단에 항상 노출 — 클릭은 전역 위임(bindGlobalShare)
+  return `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+    <h1>간호조무사 모의 문제은행</h1>
+    <button class="sm" id="shareAppBtn" style="flex:0 0 auto;margin-top:4px">📣 앱 알리기</button>
+  </div>
   <p class="sub">국가시험 대비 자체 제작 ${DATA.questions.length}문항 · 5지선다 · 해설 포함</p>`;
 }
+const APP_SHARE_MSG = "간호조무사 국가시험 대비 무료 문제은행 앱이에요. 자체 창작 2,400여 문항과 실전 모의고사를 풀어보세요!";
+document.addEventListener("click", ev=>{
+  const b = ev.target.closest("#shareAppBtn"); if(!b) return;
+  shareTextOut(APP_SHARE_MSG).then(ok=>{
+    if(!ok) return;
+    b.textContent = "✅ 공유했어요!";
+    setTimeout(()=>{ b.textContent = "📣 앱 알리기"; }, 2000);
+  });
+});
 
 /* 저작권·면책 표기 — 네 탭 모두 같은 꼬리말을 쓴다 */
 function footerHtml(){
@@ -578,12 +591,10 @@ function renderHome(){
       <p class="hint">세션을 누르면 과목별 점수를 볼 수 있습니다.</p></div>` : ""; })()}
   `}
 
-  <button class="btn ghost" id="shareAppBtn" style="margin-top:14px">📣 친구에게 앱 알리기</button>
   <div id="promoList"></div>
   ${footerHtml()}`;
 
   bindTabs(); bindResume();
-  bindShareBtn("shareAppBtn", "간호조무사 국가시험 대비 무료 문제은행 앱이에요. 자체 창작 2,400여 문항과 실전 모의고사를 풀어보세요!");
   mountPromo();
   app.querySelectorAll("[data-sess]").forEach(el=> el.onclick = ()=> renderSessionDetail(+el.dataset.sess, "mock"));
   if(tab === "practice"){
@@ -875,7 +886,11 @@ function adTick(){ adCount++; if(adCount % AD_EVERY === 0) adPending = true; }
 function adMaybeShow(){ if(adPending){ adPending = false; adShow(); } }
 try{
   const g = window.__tossAdGroups;
-  if(window.TossAdsBridge && g && g.interstitial) TossAdsBridge.preloadInterstitial(g.interstitial);
+  if(window.TossAdsBridge && g){
+    // 배너는 브릿지가 하단 오버레이로 부착하고 높이를 --banner-h로 알려준다(body padding이 소비)
+    if(g.banner && TossAdsBridge.attachBanner) TossAdsBridge.attachBanner(g.banner);
+    if(g.interstitial && TossAdsBridge.preloadInterstitial) TossAdsBridge.preloadInterstitial(g.interstitial);
+  }
 }catch(e){}
 
 /* ---------- 파동권 앱 연동: 앱·성적 공유 + 다른 앱 리스트 ----------
@@ -1274,9 +1289,11 @@ function renderNote(){
   </div>
   <button class="btn ghost" id="clearNote" style="color:var(--bad)">${KIND} 목록 전체 초기화</button>
   `:`<div class="empty">${isStar?"별표한 문항이 없습니다.<br>문제를 풀 때 문제 위 ☆ 버튼을 누르면 여기에 모입니다.":"저장된 오답이 없습니다.<br>문제를 풀다 틀리면 자동으로 저장됩니다."}</div>`}
+  <div id="promoList"></div>
   ${footerHtml()}
   `;
   bindTabs(); bindResume();
+  mountPromo();
   $("#viewSeg").addEventListener("click", ev=>{
     const b = ev.target.closest("[data-view2]"); if(!b) return;
     noteView = b.dataset.view2; noteSubj = "all"; noteDiff = "all"; renderNote();
@@ -1441,9 +1458,11 @@ function renderHistory(){
       ${seen?`<button class="btn ghost" id="clearRecent" style="margin-top:10px">풀어본 범위 초기화</button>`:""}
     </div>`; })()}
   ${(hist.length||tot)?`<button class="btn ghost" id="clearHist" style="color:var(--bad)">기록 전체 초기화</button>`:""}
+  <div id="promoList"></div>
   ${footerHtml()}
   `;
   bindTabs();
+  mountPromo();
   app.querySelectorAll("[data-sess]").forEach(el=> el.onclick = ()=> renderSessionDetail(+el.dataset.sess, "history"));
   const rb = $("#clearRecent");
   if(rb) rb.onclick = ()=>{
