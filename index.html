@@ -133,6 +133,17 @@ h1{font-size:1.25rem;margin:8px 0 2px}
   padding:10px 18px;border-radius:999px;font-size:.85rem;opacity:0;pointer-events:none;transition:opacity .25s;z-index:50}
 .toast.show{opacity:.94}
 .footer{color:var(--sub);font-size:.72rem;text-align:center;margin-top:26px;line-height:1.7}
+/* 파동권 다른 앱 리스트 */
+.promo-row{display:flex;align-items:center;gap:10px;width:100%;padding:10px 4px;border:0;background:none;
+  border-top:1px solid var(--line);cursor:pointer;text-align:left;font:inherit;color:inherit}
+.promo-row:first-of-type{border-top:0}
+.promo-icon{width:40px;height:40px;border-radius:10px;flex:0 0 auto}
+.promo-emoji{width:40px;height:40px;border-radius:10px;background:var(--bg);display:flex;align-items:center;
+  justify-content:center;font-size:1.3rem;flex:0 0 auto}
+.promo-text{display:flex;flex-direction:column;min-width:0;flex:1}
+.promo-name{font-weight:700;font-size:.92rem}
+.promo-tagline{color:var(--sub);font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.promo-arrow{color:var(--sub);font-size:1.2rem}
 </style>
 </head>
 <body>
@@ -153,7 +164,7 @@ const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
 const LS_RECENT = "naq_recent_v1";   // 최근 출제 이력(회차 순번) — 같은 문항이 연달아 나오지 않게
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.23.3";
+const APP_VERSION = "2026.08.23.4";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
@@ -567,9 +578,13 @@ function renderHome(){
       <p class="hint">세션을 누르면 과목별 점수를 볼 수 있습니다.</p></div>` : ""; })()}
   `}
 
+  <button class="btn ghost" id="shareAppBtn" style="margin-top:14px">📣 친구에게 앱 알리기</button>
+  <div id="promoList"></div>
   ${footerHtml()}`;
 
   bindTabs(); bindResume();
+  bindShareBtn("shareAppBtn", "간호조무사 국가시험 대비 무료 문제은행 앱이에요. 자체 창작 2,400여 문항과 실전 모의고사를 풀어보세요!");
+  mountPromo();
   app.querySelectorAll("[data-sess]").forEach(el=> el.onclick = ()=> renderSessionDetail(+el.dataset.sess, "mock"));
   if(tab === "practice"){
     $("#subjChips").addEventListener("click", ev=>{
@@ -863,6 +878,96 @@ try{
   if(window.TossAdsBridge && g && g.interstitial) TossAdsBridge.preloadInterstitial(g.interstitial);
 }catch(e){}
 
+/* ---------- 파동권 앱 연동: 앱·성적 공유 + 다른 앱 리스트 ----------
+   레지스트리(https://fadongkwon.com/apps.csv)는 전 앱 공통 원본.
+   링크 규칙: Play=스토어 URL, 토스=createShareLink(https) — intoss 원문은
+   메신저에서 하이퍼링크가 안 되는 죽은 텍스트라 폴백으로만 쓴다. */
+const SELF_APP_ID = "nursing-quiz";
+const PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.fadongkwon.nursing_quiz";
+const TOSS_SCHEME = "intoss://nursing-quiz";
+function appPlatform(){
+  if(window.MiniBridge) return "android";
+  if(window.TossAdsBridge) return "toss";
+  return "web";
+}
+async function shareTextOut(text){
+  try{
+    const p = appPlatform();
+    if(p === "android"){
+      if(!MiniBridge.shareText) return false;
+      MiniBridge.shareText(text + "\n" + PLAY_STORE_URL);
+      return true;
+    }
+    if(p === "toss"){
+      let link = null;
+      try{ if(TossAdsBridge.createShareLink) link = await TossAdsBridge.createShareLink(TOSS_SCHEME); }catch(e){}
+      if(!TossAdsBridge.shareMessage) return false;
+      return (await TossAdsBridge.shareMessage(text + "\n" + (link || TOSS_SCHEME))) === true;
+    }
+    const msg = text + "\n" + PLAY_STORE_URL;
+    if(navigator.share){ await navigator.share({text: msg}); return true; }
+    await navigator.clipboard.writeText(msg);
+    toast("클립보드에 복사되었습니다");
+    return true;
+  }catch(e){ return false; }
+}
+function bindShareBtn(id, text){
+  const b = document.getElementById(id); if(!b) return;
+  b.onclick = ()=> shareTextOut(text).then(ok=>{
+    if(!ok) return;
+    const orig = b.textContent;
+    b.textContent = "✅ 공유했어요!";
+    setTimeout(()=>{ b.textContent = orig; }, 2000);
+  });
+}
+const PROMO_URL = "https://fadongkwon.com/apps.csv";
+const PROMO_CACHE = "naq_promo_csv";
+function parsePromoCsv(text){
+  const lines = text.trim().split(/\r?\n/);
+  if(lines.length < 2) return [];
+  const header = lines[0].split(",").map(s=>s.trim());
+  const col = (row,key)=> (row[header.indexOf(key)]||"").trim();
+  return lines.slice(1).map(l=>l.split(",")).filter(r=>r.length >= header.length).map(r=>({
+    id: col(r,"id"), name: col(r,"name"), tagline: col(r,"tagline"), emoji: col(r,"emoji"),
+    playPackage: col(r,"play_package"), tossScheme: col(r,"toss_scheme"),
+    play: col(r,"play")==="1", toss: col(r,"toss")==="1", icon: col(r,"icon"),
+  })).filter(a=>a.id);
+}
+function openPromoApp(a){
+  const p = appPlatform();
+  if(p === "toss"){
+    if(window.TossAdsBridge.openMiniApp) TossAdsBridge.openMiniApp(a.tossScheme);
+    else location.href = a.tossScheme;
+  }else if(p === "android" && MiniBridge.openStore){
+    MiniBridge.openStore(a.playPackage);
+  }else{
+    window.open("https://play.google.com/store/apps/details?id=" + a.playPackage, "_blank");
+  }
+}
+function mountPromo(){
+  const el = document.getElementById("promoList"); if(!el) return;
+  const p = appPlatform();
+  const render = (csv)=>{
+    const apps = parsePromoCsv(csv).filter(a=> a.id !== SELF_APP_ID && (p==="toss" ? a.toss : a.play));
+    if(!apps.length){ el.innerHTML = ""; return; }
+    el.innerHTML = `<div class="card"><h2>이런 앱도 있어요</h2>` + apps.map((a,i)=>
+      `<button class="promo-row" data-promo="${i}">` +
+      (a.icon ? `<img class="promo-icon" src="${a.icon}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display=''"><span class="promo-emoji" style="display:none">${a.emoji}</span>`
+              : `<span class="promo-emoji">${a.emoji}</span>`) +
+      `<span class="promo-text"><span class="promo-name">${esc(a.name)}</span><span class="promo-tagline">${esc(a.tagline)}</span></span><span class="promo-arrow">›</span></button>`
+    ).join("") + `</div>`;
+    el.querySelectorAll("[data-promo]").forEach(b=> b.onclick = ()=> openPromoApp(apps[+b.dataset.promo]));
+  };
+  let cached = null;
+  try{ cached = localStorage.getItem(PROMO_CACHE); }catch(e){}
+  if(cached) render(cached);
+  fetch(PROMO_URL, {cache:"no-cache"}).then(r=> r.ok ? r.text() : null).then(fresh=>{
+    if(!fresh || !fresh.split(/\r?\n/)[0].includes("id") || fresh === cached) return;
+    try{ localStorage.setItem(PROMO_CACHE, fresh); }catch(e){}
+    render(fresh);
+  }).catch(()=>{});
+}
+
 function answer(pick){
   const q = quiz.list[quiz.idx];
   if(quiz.defer){
@@ -1005,6 +1110,7 @@ function renderResult(){
   const denom = full ? total : n;
   // 실전 판정: 총점 60% 이상 & 매 과목 40% 이상 (미응답=오답)
   let passHtml = "";
+  let mockPass = null;   // 성적 공유 문구에 사용
   const failSubj = quiz.mock ? SUBJECTS.filter(s=>{
     const st = subjStat[s.id]; return st && st.ok < Math.ceil(st.all*0.4);
   }) : [];
@@ -1012,6 +1118,7 @@ function renderResult(){
     const cut = Math.ceil(total*0.6);
     const totalPass = okN >= cut;
     const pass = totalPass && failSubj.length===0;
+    mockPass = pass;
     passHtml = `<div class="passband ${pass?"pass":"fail"}">
       ${pass?"🎉 합격 기준 통과!":"불합격 기준"} (총점 ${okN}점${totalPass?" ≥":" <"} 합격선 ${cut}점${failSubj.length?` · 과락: ${failSubj.map(s=>esc(s.name)).join(", ")}`:""})
     </div>
@@ -1057,10 +1164,16 @@ function renderResult(){
   <div class="rowbtns">
     <button class="btn ghost" id="homeBtn">홈으로</button>
     <button class="btn" id="noteBtn">오답노트${wrongs.length?" 복습":""}</button>
-  </div>`;
+  </div>
+  <button class="btn ghost" id="shareScoreBtn" style="margin-top:10px">📤 성적 공유하기</button>`;
   app.querySelectorAll("[data-view]").forEach(b=> b.onclick = ()=> viewOne(b.dataset.view, renderResult, true));
   $("#homeBtn").onclick = ()=> goTab(quiz.mock ? "mock" : "practice");
   $("#noteBtn").onclick = ()=> goTab("note");
+  const pctS = denom ? Math.round(okN/denom*100) : 0;
+  bindShareBtn("shareScoreBtn",
+    quiz.mock
+      ? `간호조무사 실전 모의고사 ${okN}/${denom}점 (정답률 ${pctS}%) — ${mockPass?"합격 기준 통과! 🎉":"다음엔 합격 기준에 도전!"}\n간호조무사 모의고사 앱에서 함께 공부해요.`
+      : `간호조무사 문제풀이 ${okN}/${denom} 정답 (정답률 ${pctS}%)\n간호조무사 모의고사 앱에서 함께 공부해요.`);
   window.scrollTo(0,0);
 }
 
