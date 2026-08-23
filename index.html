@@ -170,7 +170,7 @@ const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
 const LS_RECENT = "naq_recent_v1";   // 최근 출제 이력(회차 순번) — 같은 문항이 연달아 나오지 않게
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.23.6";
+const APP_VERSION = "2026.08.23.7";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
@@ -715,9 +715,10 @@ function resumeKind(st){
     ? `실전 모의고사${st.mode&&MOCK_MODES[st.mode]?" · "+MOCK_MODES[st.mode].label:""} · ${st.defer?"종료 후 채점":"바로 채점"}`
     : (st.fromNote ? "오답노트 복습" : (st.fromStar ? "별표 복습" : "문제 풀이"));
 }
-function pauseQuiz(){
-  if(!quiz) return;
-  clearAdvance();
+/* 진행 상황을 조용히 저장한다(화면 이동 없음). 답할 때마다·화면 이탈 때마다 불려서
+   광고 게이트나 뒤로가기로 갑자기 나가도 진행이 유실되지 않는다. */
+function saveProgress(){
+  if(!quiz || !quiz.list || quiz.saved) return;   // 채점 완료(quiz.saved) 후에는 저장하지 않는다
   const st = {
     t: Date.now(),
     ids: quiz.list.map(q=>q.id),
@@ -730,12 +731,37 @@ function pauseQuiz(){
   const arr = loadResumes().filter(x=>resumeKey(x) !== resumeKey(st));   // 같은 모드는 최신 것으로 교체
   arr.unshift(st);
   saveResumes(arr);
+  return st;
+}
+function pauseQuiz(){
+  if(!quiz) return;
+  clearAdvance();
+  const st = saveProgress();
   stopClock(); document.onkeydown = null;
-  const back = resumeTab(st);
+  const back = st ? resumeTab(st) : (quiz.mock ? "mock" : "practice");
   quiz = null;
   toast("진행 상황을 저장했습니다");
   goTab(back);
 }
+/* 앱 전환·종료 시에도 진행 저장 (토스·브라우저 공통) */
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState === "hidden") saveProgress(); });
+/* Android 래퍼 뒤로가기 계약: true를 반환하면 웹이 소비한 것 */
+window.__miniBack = function(){
+  try{
+    const gate = document.querySelector(".adgate");
+    if(gate){ adPending = true; gate.remove(); }   // 게이트를 건너뛰면 다시 들어올 때 게이트가 다시 뜬다
+    if(quiz && quiz.list){
+      if(quiz.saved){   // 채점 결과 화면: 저장 없이 홈으로
+        const back = quiz.mock ? "mock" : "practice";
+        stopClock(); quiz = null; goTab(back);
+        return true;
+      }
+      pauseQuiz();
+      return true;
+    }
+  }catch(e){}
+  return false;   // 홈 화면 등: 래퍼가 앱 종료 처리
+};
 function resumeQuiz(key){
   const arr = loadResumes();
   const st = arr.find(x=>resumeKey(x) === key);
@@ -1032,6 +1058,7 @@ function answer(pick){
     // 답을 지우면 출제 이력에서도 빼서, 안 푼 문항은 다시 나올 수 있게 한다
     if(quiz.answers[quiz.idx]) markServedOne(q.id, quiz.seq); else unmarkServed(q.id);
     if(fresh && quiz.answers[quiz.idx]) adTick();   // 처음 답한 문항만 광고 카운트
+    saveProgress();
     renderQ();
     // 처음 답한 경우에만 자동으로 다음 문항으로 (답 변경·해제 시에는 머무름)
     clearAdvance();
@@ -1056,6 +1083,7 @@ function answer(pick){
   });
   recordStat(q, ok);
   adTick();
+  saveProgress();
   if(!ok) addWrong(q, pick);
   else {
     if(quiz.fromNote && pref.autoRemove){ removeWrong(q.id); toast("오답노트에서 제거되었습니다"); }
