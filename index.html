@@ -23,7 +23,9 @@
 html{font-size:16px}
 body{margin:0;background:var(--bg);color:var(--ink);
   font-family:"Pretendard","Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",sans-serif;
-  line-height:1.55; padding-bottom:env(safe-area-inset-bottom)}
+  line-height:1.55;
+  /* --banner-h: 토스 배너는 페이지 위 오버레이라 래퍼 브릿지가 높이를 넣어준다 */
+  padding-bottom:calc(env(safe-area-inset-bottom) + var(--banner-h, 0px))}
 .wrap{max-width:720px;margin:0 auto;padding:16px 14px 48px}
 h1{font-size:1.25rem;margin:8px 0 2px}
 .sub{color:var(--sub);font-size:.85rem;margin:0 0 18px}
@@ -137,7 +139,7 @@ h1{font-size:1.25rem;margin:8px 0 2px}
 <div class="wrap" id="app"></div>
 <div class="toast" id="toast"></div>
 
-<script src="data.js?v=2438c"></script>
+<script src="data.js?v=2438d"></script>
 <script>
 "use strict";
 const $ = sel => document.querySelector(sel);
@@ -151,7 +153,7 @@ const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
 const LS_RECENT = "naq_recent_v1";   // 최근 출제 이력(회차 순번) — 같은 문항이 연달아 나오지 않게
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.23.2";
+const APP_VERSION = "2026.08.23.3";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
@@ -839,6 +841,28 @@ function renderQ(){
   window.scrollTo(0,0);
 }
 
+/* ---------- 광고 (앱 래퍼에서만 동작 — 웹 브라우저에서는 브릿지가 없어 no-op) ----------
+   즉시 채점 모드: 25문항 답할 때마다 다음 문제로 넘어가는 시점에 전면 광고.
+   종료 후 채점(모의고사 포함): 타이머를 방해하지 않도록 제출·채점 시 1회만. */
+const AD_EVERY = 25;
+let adCount = 0, adPending = false;
+function adShow(){
+  try{
+    if(window.MiniBridge && MiniBridge.showInterstitial){ MiniBridge.showInterstitial(); return; }
+    const g = window.__tossAdGroups;
+    if(window.TossAdsBridge && g && g.interstitial){
+      const p = TossAdsBridge.showInterstitial(g.interstitial);
+      if(p && p.then) p.then(()=>TossAdsBridge.preloadInterstitial(g.interstitial)).catch(()=>{});
+    }
+  }catch(e){}
+}
+function adTick(){ adCount++; if(adCount % AD_EVERY === 0) adPending = true; }
+function adMaybeShow(){ if(adPending){ adPending = false; adShow(); } }
+try{
+  const g = window.__tossAdGroups;
+  if(window.TossAdsBridge && g && g.interstitial) TossAdsBridge.preloadInterstitial(g.interstitial);
+}catch(e){}
+
 function answer(pick){
   const q = quiz.list[quiz.idx];
   if(quiz.defer){
@@ -871,6 +895,7 @@ function answer(pick){
     else if(a===q.ans) b.classList.add("reveal");
   });
   recordStat(q, ok);
+  adTick();
   if(!ok) addWrong(q, pick);
   else {
     if(quiz.fromNote && pref.autoRemove){ removeWrong(q.id); toast("오답노트에서 제거되었습니다"); }
@@ -887,6 +912,7 @@ function answer(pick){
 }
 
 function nextQ(){
+  adMaybeShow();
   if(quiz.idx < quiz.list.length-1){ quiz.idx++; renderQ(); }
   else renderResult();
 }
@@ -944,6 +970,7 @@ function submitExam(){
     recordStat(q, a.ok);
     if(!a.ok) addWrong(q, a.pick);
   });
+  adShow(); // 종료 후 채점: 제출 시 1회 (풀이 중에는 광고 없음)
   renderResult();
 }
 
