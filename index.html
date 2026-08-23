@@ -170,7 +170,7 @@ const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
 const LS_RECENT = "naq_recent_v1";   // 최근 출제 이력(회차 순번) — 같은 문항이 연달아 나오지 않게
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.23.7";
+const APP_VERSION = "2026.08.23.8";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
@@ -1011,6 +1011,7 @@ function parsePromoCsv(text){
     id: col(r,"id"), name: col(r,"name"), tagline: col(r,"tagline"), emoji: col(r,"emoji"),
     playPackage: col(r,"play_package"), tossScheme: col(r,"toss_scheme"),
     play: col(r,"play")==="1", toss: col(r,"toss")==="1", icon: col(r,"icon"),
+    taglineToss: col(r,"tagline_toss"),
   })).filter(a=>a.id);
 }
 function openPromoApp(a){
@@ -1034,7 +1035,7 @@ function mountPromo(){
       `<button class="promo-row" data-promo="${i}">` +
       (a.icon ? `<img class="promo-icon" src="${a.icon}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display=''"><span class="promo-emoji" style="display:none">${a.emoji}</span>`
               : `<span class="promo-emoji">${a.emoji}</span>`) +
-      `<span class="promo-text"><span class="promo-name">${esc(a.name)}</span><span class="promo-tagline">${esc(a.tagline)}</span></span><span class="promo-arrow">›</span></button>`
+      `<span class="promo-text"><span class="promo-name">${esc(a.name)}</span><span class="promo-tagline">${esc(p==="toss" && a.taglineToss ? a.taglineToss : a.tagline)}</span></span><span class="promo-arrow">›</span></button>`
     ).join("") + `</div>`;
     el.querySelectorAll("[data-promo]").forEach(b=> b.onclick = ()=> openPromoApp(apps[+b.dataset.promo]));
   };
