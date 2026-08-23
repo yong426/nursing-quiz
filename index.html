@@ -144,6 +144,12 @@ h1{font-size:1.25rem;margin:8px 0 2px}
 .promo-name{font-weight:700;font-size:.92rem}
 .promo-tagline{color:var(--sub);font-size:.78rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .promo-arrow{color:var(--sub);font-size:1.2rem}
+/* 25문제 광고 게이트 */
+.adgate{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px}
+.adgate-card{background:var(--card);border-radius:18px;padding:28px 22px;max-width:320px;width:100%;text-align:center}
+.adgate-card h2{margin:10px 0 6px;font-size:1.15rem}
+.adgate-card p{color:var(--sub);font-size:.9rem;line-height:1.6;margin:0 0 16px}
+.adgate-card .btn{width:100%}
 </style>
 </head>
 <body>
@@ -164,7 +170,7 @@ const LS_STAT  = "naq_stat_v1";
 const LS_RESUME = "naq_resume_v1";   // 중간 저장(진행 중 세션)
 const LS_RECENT = "naq_recent_v1";   // 최근 출제 이력(회차 순번) — 같은 문항이 연달아 나오지 않게
 /* 앱 버전 — 배포 시 version.json의 app 값과 함께 올린다 */
-const APP_VERSION = "2026.08.23.5";
+const APP_VERSION = "2026.08.23.6";
 /* 버전이 올라가면 비우는 키 (오답노트·학습기록·누적통계는 보존) */
 const VOLATILE_KEYS = [LS_PREF, LS_RESUME];
 
@@ -796,6 +802,8 @@ function navbarHtml(total){
 }
 
 function renderQ(){
+  // 25문제 게이트: 광고를 봐야 다음 문제로 (모든 모드 공통)
+  if(adPending){ adPending = false; adGate(renderQ); return; }
   const q = quiz.list[quiz.idx];
   const total = quiz.list.length;
   const cur = quiz.answers[quiz.idx];
@@ -868,22 +876,53 @@ function renderQ(){
 }
 
 /* ---------- 광고 (앱 래퍼에서만 동작 — 웹 브라우저에서는 브릿지가 없어 no-op) ----------
-   즉시 채점 모드: 25문항 답할 때마다 다음 문제로 넘어가는 시점에 전면 광고.
-   종료 후 채점(모의고사 포함): 타이머를 방해하지 않도록 제출·채점 시 1회만. */
+   모든 모드 공통: 25문항 답할 때마다 다음 문제로 넘어가기 전에 게이트 팝업이 뜨고,
+   전면 광고를 봐야 이어서 풀 수 있다. 광고가 없는 환경(웹·광고 미충전)은 그냥 통과. */
 const AD_EVERY = 25;
 let adCount = 0, adPending = false;
-function adShow(){
-  try{
-    if(window.MiniBridge && MiniBridge.showInterstitial){ MiniBridge.showInterstitial(); return; }
-    const g = window.__tossAdGroups;
-    if(window.TossAdsBridge && g && g.interstitial){
-      const p = TossAdsBridge.showInterstitial(g.interstitial);
-      if(p && p.then) p.then(()=>TossAdsBridge.preloadInterstitial(g.interstitial)).catch(()=>{});
-    }
-  }catch(e){}
-}
 function adTick(){ adCount++; if(adCount % AD_EVERY === 0) adPending = true; }
-function adMaybeShow(){ if(adPending){ adPending = false; adShow(); } }
+/* 전면 광고를 띄우고 닫힐 때까지 기다린다. 실패·미지원·30초 초과는 통과(사용자를 가두지 않는다). */
+function adShowAwait(){
+  return new Promise(res=>{
+    try{
+      if(window.MiniBridge && MiniBridge.showInterstitial){
+        let done = false;
+        const t = setTimeout(()=>{ if(!done){ done = true; res(); } }, 30000);
+        window.__miniAdDone = (kind)=>{
+          if(kind !== "interstitial" || done) return;
+          done = true; clearTimeout(t); window.__miniAdDone = undefined; res();
+        };
+        MiniBridge.showInterstitial();
+        return;
+      }
+      const g = window.__tossAdGroups;
+      if(window.TossAdsBridge && g && g.interstitial && TossAdsBridge.showInterstitial){
+        TossAdsBridge.showInterstitial(g.interstitial)
+          .then(()=>{ try{ TossAdsBridge.preloadInterstitial(g.interstitial); }catch(e){} })
+          .catch(()=>{})
+          .then(()=>res());
+        return;
+      }
+    }catch(e){}
+    res();
+  });
+}
+/* 25문제 게이트: 오버레이를 띄우고 광고 시청 후 next() 실행 */
+function adGate(next){
+  const ov = document.createElement("div");
+  ov.className = "adgate";
+  ov.innerHTML = `<div class="adgate-card">
+    <div style="font-size:2.2rem">🎉</div>
+    <h2>${AD_EVERY}문제를 풀었어요!</h2>
+    <p>잠깐 광고를 보고<br>다음 ${AD_EVERY}문제를 이어서 풀어보세요.</p>
+    <button class="btn" id="adGateBtn">광고 보고 계속하기</button></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector("#adGateBtn").onclick = ()=>{
+    const b = ov.querySelector("#adGateBtn");
+    b.disabled = true; b.textContent = "광고 불러오는 중…";
+    adShowAwait().then(()=>{ ov.remove(); next(); });
+  };
+}
 try{
   const g = window.__tossAdGroups;
   if(window.TossAdsBridge && g){
@@ -992,6 +1031,7 @@ function answer(pick){
     quiz.answers[quiz.idx] = (prev && prev.pick === pick) ? null : {pick};
     // 답을 지우면 출제 이력에서도 빼서, 안 푼 문항은 다시 나올 수 있게 한다
     if(quiz.answers[quiz.idx]) markServedOne(q.id, quiz.seq); else unmarkServed(q.id);
+    if(fresh && quiz.answers[quiz.idx]) adTick();   // 처음 답한 문항만 광고 카운트
     renderQ();
     // 처음 답한 경우에만 자동으로 다음 문항으로 (답 변경·해제 시에는 머무름)
     clearAdvance();
@@ -1032,7 +1072,6 @@ function answer(pick){
 }
 
 function nextQ(){
-  adMaybeShow();
   if(quiz.idx < quiz.list.length-1){ quiz.idx++; renderQ(); }
   else renderResult();
 }
@@ -1090,7 +1129,6 @@ function submitExam(){
     recordStat(q, a.ok);
     if(!a.ok) addWrong(q, a.pick);
   });
-  adShow(); // 종료 후 채점: 제출 시 1회 (풀이 중에는 광고 없음)
   renderResult();
 }
 
